@@ -79,3 +79,68 @@ No single tool solves mobile security. A robust solution is layered:
 Each layer addresses a different vector. Together, they form a defense-in-depth strategy that significantly raises the cost and complexity of attacks against your app.
 
 ---
+
+## 2. JailMonkey — Device Integrity Checks
+
+>  JailMonkey runs native checks at app startup to detect rooted/jailbroken devices, emulators, and runtime hooks. The result is a single boolean you gate your app on. It is a **client-side risk signal, not a guarantee** — a sophisticated attacker can bypass it, which is why you send the signal to your backend and combine it with server-side enforcement.
+
+### What JailMonkey Does
+
+[JailMonkey](https://github.com/GantMan/jail-monkey) is a React Native library that performs runtime device integrity checks. It detects whether a device is **rooted (Android)**, **jailbroken (iOS)**, running on an **emulator**, in **debug mode**, has **ADB enabled**, uses **mock location**, or shows signs of **runtime hooking or code injection** (e.g., Frida, Xposed).
+
+All checks are performed **client-side** using native code bridges. There is no network activity, no data collection, and no sensitive permissions required — the source code is fully auditable on GitHub.
+
+### How It Works Internally
+
+**On Android**, JailMonkey integrates [RootBeer](https://github.com/scottyab/rootbeer), which performs multiple low-level checks:
+
+- Presence of root management apps (SuperSU, Magisk)
+- Existence of the `su` binary
+- Dangerous system properties and writable system paths
+- Build tag test-keys (common in custom ROMs)
+- Magisk binary detection
+- ADB enabled status
+- App installed on external storage
+- Mock location enabled
+- Emulator signatures (device IDs, files, properties)
+- Runtime hooking indicators
+
+**On iOS**, JailMonkey checks:
+
+- Existence of jailbreak artifacts (`/Applications/Cydia.app`, `apt`, etc.)
+- Ability to write outside the app sandbox
+- Presence of jailbreak tools loaded at runtime
+- Simulator detection
+- Debug mode and hooking/injection frameworks
+
+### Why Device Integrity Checks Matter
+
+On a rooted or jailbroken device, the OS security model breaks down entirely. An attacker can:
+
+- Read your app's private keychain/keystore data
+- Intercept and modify network traffic even over HTTPS (SSL pinning bypass)
+- Hook your app's functions at runtime using tools like Frida
+- Dump memory to extract tokens or secrets
+- Bypass biometric and PIN checks
+
+JailMonkey lets you detect these conditions before your app does anything sensitive.
+
+```mermaid
+flowchart TD
+   A([App Startup]) --> B{__DEV__ mode?}
+   B -- Yes --> C([Skip checks\nDev environment])
+   B -- No --> D[Run integrity checks]
+   D --> E{isJailBroken or\ntrustFall?}
+   E -- Yes --> FAIL
+   E -- No --> F{hookDetected?}
+   F -- Yes --> FAIL
+   F -- No --> G{ADB enabled?}
+   G -- Yes --> FAIL
+   G -- No --> H{isDebuggedMode?}
+   H -- Yes --> FAIL
+   H -- No --> I{RootBeer flags\nany truthy?}
+   I -- Yes --> FAIL
+   I -- No --> PASS
+   PASS([isDeviceSecure = true\nProceed normally])
+   FAIL([isDeviceSecure = false\nBlock or restrict features])
+```

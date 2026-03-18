@@ -213,3 +213,46 @@ const isDeviceSecure = useDeviceSecurity();
 // In your startup navigation logic:
 if (!isDeviceSecure && !__DEV__) navigate('ApplicationUnavailable');
 ```
+
+### Important Caveat: Client-Side Limitations
+
+JailMonkey's checks run entirely on the device. A sufficiently advanced attacker can patch or bypass them. This is a **first line of defense**, not a complete solution. Its real value is:
+
+- Blocking unsophisticated attacks and casual jailbreakers
+- Sending device integrity signals to your backend for risk scoring
+- Satisfying compliance requirements around device posture
+
+Treat the results as **risk signals**, not absolute truth. Combine them with server-side enforcement (which is where Firebase App Check comes in).
+
+The diagram below shows how JailMonkey fits into a layered trust decision — the client-side block stops casual attackers, but backend enforcement is the authoritative layer:
+
+```mermaid
+flowchart TD
+   STARTUP([App Startup]) --> JM{JailMonkey\nchecks pass?}
+
+   JM -- No --> RESTRICT["Block or restrict\napp features client-side"]
+   JM -- Yes --> ALLOW[Allow normal app flow]
+   JM -- Either result --> SIGNAL["Send device_integrity signal\nto backend on every auth request"]
+
+   ALLOW --> APPCHECK[Firebase App Check\ntoken on every request]
+   APPCHECK --> BACKEND
+
+   SIGNAL --> BACKEND[("Your Backend\nRisk Engine")]
+
+   BACKEND --> DECISION{Risk\ndecision}
+   DECISION -- Low risk --> APPROVE([Approve request])
+   DECISION -- High risk --> DENY([Deny or step-up challenge])
+```
+
+> **Key principle**: The client block (left path) stops unsophisticated attackers immediately. But your backend receiving `device_integrity=false` as a signal is what gives you audit trails, rate limits, and risk-based authentication — regardless of what the client claims.
+
+### Practical Scenarios
+
+| Scenario | JailMonkey Response | Backend Signal |
+|---|---|---|
+| Banking app on rooted device | Block account access UI | `device_integrity=false` sent for audit log |
+| Crypto wallet with Frida hook detected | Refuse to show seed phrase | `hook_detected=true` flags session as high-risk |
+| KYC identity verification | Warn user before initiating | Integrity status forwarded to fraud backend |
+| Emulator detected in production | Block registration flow | Emulator flag triggers manual review queue |
+
+---

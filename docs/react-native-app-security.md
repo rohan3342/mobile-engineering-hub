@@ -144,3 +144,72 @@ flowchart TD
    PASS([isDeviceSecure = true\nProceed normally])
    FAIL([isDeviceSecure = false\nBlock or restrict features])
 ```
+
+### Installation
+
+```bash
+npm install jail-monkey
+# or
+yarn add jail-monkey
+```
+
+For iOS, run pod install:
+
+```bash
+cd ios && pod install
+```
+
+### Code Example
+
+A clean pattern is to encapsulate all checks in a single `useDeviceSecurity` hook that returns a boolean. Everything in the app keys off that one value.
+
+```ts
+import { useEffect, useState } from "react";
+import JailMonkey from "jail-monkey";
+
+const useDeviceSecurity = (): boolean => {
+ const [isDeviceSecure, setIsDeviceSecure] = useState(true);
+
+ useEffect(() => {
+   if (__DEV__) return; // skip checks in development
+
+   const checkSecurity = async () => {
+     const rootedDetection = JailMonkey.androidRootedDetectionMethods;
+     const isRootedByRootBeer = rootedDetection?.rootBeer
+       ? Object.values(rootedDetection.rootBeer).some(Boolean)
+       : false;
+
+     const isCompromised =
+       JailMonkey.isJailBroken()      ||
+       JailMonkey.trustFall()         ||
+       JailMonkey.hookDetected()      ||
+       JailMonkey.AdbEnabled?.()      ||
+       (await JailMonkey.isDebuggedMode?.()) ||
+       isRootedByRootBeer             ||
+       rootedDetection?.jailMonkey;
+
+     setIsDeviceSecure(!isCompromised);
+   };
+
+   checkSecurity();
+ }, []);
+
+ return isDeviceSecure;
+};
+```
+
+A few points worth noting:
+
+- **`__DEV__` bypass**: Checks are skipped in development so you're never blocked on a simulator.
+- **`trustFall()`**: A convenience aggregator covering several checks in one call.
+- **`androidRootedDetectionMethods`**: Gives access to both RootBeer's granular flags and JailMonkey's own detector — checking both improves Android coverage.
+- **Optional chaining (`?.`)**: Some APIs are Android-only; the optional chaining prevents crashes on iOS.
+
+At startup, consume the hook and route accordingly:
+
+```tsx
+const isDeviceSecure = useDeviceSecurity();
+
+// In your startup navigation logic:
+if (!isDeviceSecure && !__DEV__) navigate('ApplicationUnavailable');
+```

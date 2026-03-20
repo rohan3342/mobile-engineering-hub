@@ -309,3 +309,34 @@ sequenceDiagram
        API-->>App: 401 Unauthorized
    end
 ```
+
+### What It Protects
+
+- **Firebase Realtime Database** and **Firestore** — enforce App Check in security rules
+- **Cloud Functions** — check tokens in function middleware
+- **Cloud Storage** — restrict read/write to attested apps
+- **Custom backends** — verify tokens manually using the Firebase Admin SDK
+
+### Setup in React Native
+
+Install the required packages:
+
+```bash
+npm install @react-native-firebase/app @react-native-firebase/app-check
+# or
+yarn add @react-native-firebase/app @react-native-firebase/app-check
+```
+
+For iOS, install pods:
+
+```bash
+cd ios && pod install
+```
+
+**iOS — Enable App Attest in your Apple Developer account**:
+
+In your `AppDelegate.swift`, no changes are needed beyond standard Firebase setup. App Attest capability must be enabled in Xcode under **Signing & Capabilities**.
+
+**Android — Configure Play Integrity**:
+
+Ensure your app is published (even as an internal test track) in the Google Play Console. Play Integrity requires a real Google Play-distributed app to issue valid tokens.

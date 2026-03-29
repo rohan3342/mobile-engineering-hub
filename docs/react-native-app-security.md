@@ -1,4 +1,4 @@
-# Enhancing Mobile App Security in React Native: A Practical Guide Using JailMonkey, Firebase App Check, and Sardine SDK
+# React Native Security: A Defense-in-Depth Architecture Guide
 
 ---
 
@@ -47,7 +47,7 @@ flowchart LR
        D1[Code obfuscation\n+ env injection]
        D2[Firebase App Check]
        D3[SSL Pinning]
-       D4[JailMonkey hook detection]
+       D4["JailMonkey + freeRASP\nhook & integrity detection"]
        D5[Encrypted MMKV\n+ Keychain]
    end
 
@@ -71,12 +71,28 @@ No single tool solves mobile security. A robust solution is layered:
 | Layer | Tool | Threat Addressed |
 |---|---|---|
 | Device Integrity | JailMonkey | Rooted/jailbroken devices, emulators, debug mode |
+| Runtime Application Self-Protection | freeRASP *(free tier: 100k download cap — see Section 3)* | App tampering detection, hook detection, unofficial stores, screen capture blocking, obfuscation bypass, VPN / time / location spoofing |
 | Backend Abuse Protection | Firebase App Check | Unauthorized API/database access, bot traffic |
 | Transaction Fraud Prevention | Sardine SDK *(fintech)* | Fraud, account takeover, risky onboarding |
 | Data at Rest & Authentication | MMKV + Keychain + Biometrics | Credential theft, storage extraction, unattended access |
 | Network Transport | SSL Pinning + Payload Encryption | MITM attacks, TLS interception, in-transit data exposure |
 
 Each layer addresses a different vector. Together, they form a defense-in-depth strategy that significantly raises the cost and complexity of attacks against your app.
+
+### OWASP Mobile Top 10 Coverage
+
+This guide's tooling directly addresses six of the [OWASP Mobile Top 10 (2024)](https://owasp.org/www-project-mobile-top-10/) risk categories. Understanding the mapping clarifies *why* each tool exists, not just *what* it does:
+
+| OWASP Category | Risk | This Guide's Defense |
+|---|---|---|
+| M1 — Improper Credential Usage | Hardcoded secrets, insecure credential storage in plaintext | Keychain + Biometrics (Section 6); env-var injection at build time (Section 8) |
+| M2 — Inadequate Supply Chain Security | Tampered dependencies, repackaged or resigned binaries | freeRASP `appIntegrity` callback (Section 3) |
+| M3 — Insecure Authentication / Authorization | Weak or bypassable authentication flows | Biometrics + Keychain `BIOMETRY_ANY` access control (Section 6) |
+| M5 — Insecure Communication | MITM attacks, plaintext traffic, TLS misconfiguration | SSL Pinning + Payload Encryption (Section 7) |
+| M8 — Security Misconfiguration | Debug mode in production builds, exposed API keys in JS bundle | JailMonkey `isDebuggedMode`; ProGuard/Hermes obfuscation; `__DEV__` guards |
+| M9 — Insecure Data Storage | Unencrypted tokens, plaintext credentials in AsyncStorage | Encrypted MMKV + Keychain (Section 6) |
+
+M4 (Insufficient Input/Output Validation), M6 (Inadequate Privacy Controls), M7 (Insufficient Binary Protections), and M10 (Insufficient Cryptography) fall outside this guide's scope but remain equally important for a complete production security posture. M7 is partially mitigated by freeRASP's obfuscation detection callback, which flags when your Android release build was shipped without ProGuard.
 
 ---
 
@@ -255,251 +271,74 @@ flowchart TD
 | KYC identity verification | Warn user before initiating | Integrity status forwarded to fraud backend |
 | Emulator detected in production | Block registration flow | Emulator flag triggers manual review queue |
 
----
+### Structuring Device Signals for Your Backend
 
-## 3. Firebase App Check — Backend Abuse Protection
+When JailMonkey detects a compromised state, don't just block the user client-side — propagate structured signals to your backend so your risk engine can make authoritative decisions. This is what transforms a client-side boolean into an auditable, enforceable record.
 
->  App Check issues cryptographically signed **attestation tokens** proving a request came from your real, unmodified app on a real device. Your backend middleware rejects everything without a valid token — bots and scripts cannot obtain one from outside the app, so they never reach your business logic.
+A well-structured payload captures all relevant flags atomically with a timestamp:
 
-### The Problem It Solves
+```ts
+import { Platform } from 'react-native';
+import JailMonkey from 'jail-monkey';
 
-Even if your app is secure, your **backend APIs are exposed to the internet**. Nothing stops an attacker from extracting your API endpoints from the JS bundle and calling them directly — bypassing the app entirely. This enables:
+interface DeviceIntegrityPayload {
+ timestamp: string;          // ISO 8601
+ platform: 'ios' | 'android';
+ signals: {
+   isJailBroken: boolean;
+   trustFall: boolean;
+   hookDetected: boolean;
+   adbEnabled: boolean | null;           // Android only
+   isDebuggedMode: boolean;
+   isOnExternalStorage: boolean | null;  // Android only
+   mockLocation: boolean | null;         // Android only
+   rootBeerFlags?: Record<string, boolean>;
+ };
+ isCompromised: boolean; // aggregate: any signal truthy
+}
 
-- Credential stuffing attacks against your auth endpoints
-- Scraping your database through your own API
-- Abusing Cloud Functions for spam or DDoS
-- Creating fake accounts at scale via automation
+const buildDeviceIntegrityPayload = async (): Promise<DeviceIntegrityPayload> => {
+ const rootedDetection = JailMonkey.androidRootedDetectionMethods;
 
-Firebase App Check solves this by ensuring **only your legitimate app** can call your backend resources.
+ const signals = {
+   isJailBroken:         JailMonkey.isJailBroken(),
+   trustFall:            JailMonkey.trustFall(),
+   hookDetected:         JailMonkey.hookDetected(),
+   adbEnabled:           JailMonkey.AdbEnabled?.() ?? null,
+   isDebuggedMode:       (await JailMonkey.isDebuggedMode?.()) ?? false,
+   isOnExternalStorage:  JailMonkey.isOnExternalStorage?.() ?? null,
+   mockLocation:         JailMonkey.isMockingLocation?.() ?? null,
+   rootBeerFlags:        rootedDetection?.rootBeer ?? undefined,
+ };
 
-### How App Check Works
+ return {
+   timestamp:    new Date().toISOString(),
+   platform:     Platform.OS as 'ios' | 'android',
+   signals,
+   isCompromised: Object.values(signals).some(v => v === true),
+ };
+};
+```
 
-App Check issues a short-lived **attestation token** that your app must send with every request. Your backend verifies this token with Firebase before processing the request. Tokens are generated using platform-specific attestation providers:
-
-| Platform | Provider | What It Verifies |
-|---|---|---|
-| iOS | App Attest (DeviceCheck fallback) | Cryptographic proof from Apple that request comes from a genuine, unmodified app |
-| Android | Play Integrity (SafetyNet fallback) | Google's verdict on app integrity and device safety |
-| Web | reCAPTCHA Enterprise / v3 | Bot detection |
-| Debug | Debug provider | Local development only — never ship to production |
-
-The attestation token is opaque to your app — Firebase handles the validation. Your backend simply enforces that valid tokens must be present.
+Send this payload on every authenticated request — not just at startup. A device can be rooted while the app is running, or root-hiding tools can fail mid-session. Attaching the integrity payload as a signed header claim gives your backend continuous visibility and an audit trail per request.
 
 ```mermaid
 sequenceDiagram
    participant App as React Native App
-   participant SDK as App Check SDK
-   participant Attest as Play Integrity / App Attest
-   participant FB as Firebase Servers
-   participant API as Your Backend API
+   participant JM as JailMonkey
+   participant API as Your Backend Risk Engine
 
-   App->>SDK: initializeAppCheck(provider)
-   SDK->>Attest: Request signed attestation
-   Attest-->>SDK: Signed attestation blob
-   SDK->>FB: Exchange attestation for token
-   FB-->>SDK: Short-lived App Check token
-   Note over SDK,App: Token cached & auto-refreshed
+   App->>JM: Run all checks (async)
+   JM-->>App: Aggregate signals
 
-   App->>API: Request + X-Firebase-AppCheck header
-   API->>FB: Admin SDK verifyToken(token)
-   FB-->>API: Valid / Invalid
-   alt Token valid
-       API-->>App: 200 OK
-   else Token missing or invalid
-       API-->>App: 401 Unauthorized
+   App->>API: Authenticated request\n+ X-Device-Integrity: {base64 JSON payload}
+   Note over API: Decode and validate payload
+   alt isCompromised === false
+       API-->>App: Normal response
+   else isCompromised === true
+       API->>API: Log event · flag session · apply step-up
+       API-->>App: 403 or step-up challenge
    end
 ```
 
-### What It Protects
-
-- **Firebase Realtime Database** and **Firestore** — enforce App Check in security rules
-- **Cloud Functions** — check tokens in function middleware
-- **Cloud Storage** — restrict read/write to attested apps
-- **Custom backends** — verify tokens manually using the Firebase Admin SDK
-
-### Setup in React Native
-
-Install the required packages:
-
-```bash
-npm install @react-native-firebase/app @react-native-firebase/app-check
-# or
-yarn add @react-native-firebase/app @react-native-firebase/app-check
-```
-
-For iOS, install pods:
-
-```bash
-cd ios && pod install
-```
-
-**iOS — Enable App Attest in your Apple Developer account**:
-
-In your `AppDelegate.swift`, no changes are needed beyond standard Firebase setup. App Attest capability must be enabled in Xcode under **Signing & Capabilities**.
-
-**Android — Configure Play Integrity**:
-
-Ensure your app is published (even as an internal test track) in the Google Play Console. Play Integrity requires a real Google Play-distributed app to issue valid tokens.
-
-### Initialization Code
-
-Configure the provider once at module load — not inside a component or hook body. Use platform-specific debug tokens so each environment can be registered separately in the Firebase Console.
-
-```ts
-import { ReactNativeFirebaseAppCheckProvider, initializeAppCheck } from "@react-native-firebase/app-check";
-import { getApp } from "@react-native-firebase/app";
-
-const rnfbProvider = new ReactNativeFirebaseAppCheckProvider();
-
-rnfbProvider.configure({
- android: {
-   provider: __DEV__ ? "debug" : "playIntegrity",
-   debugToken: process.env.FIREBASE_DEBUG_TOKEN_ANDROID,
- },
- apple: {
-   provider: __DEV__ ? "debug" : "appAttest",
-   debugToken: process.env.FIREBASE_DEBUG_TOKEN_IOS,
- },
-});
-
-export const initAppCheck = async () =>
- initializeAppCheck(getApp(), {
-   provider: rnfbProvider,
-   isTokenAutoRefreshEnabled: true,
- });
-```
-
-From here, call `initAppCheck()` before your first authenticated request, then retrieve the token and set it as the `X-Firebase-AppCheck` header on your shared API client. Wrap the retrieval in a retry loop with a short delay — Play Integrity token requests can transiently fail on Android cold starts.
-
-### Enforcing App Check on Your Backend
-
-For a custom Node.js/Express backend, verify the token in middleware before any route handler runs:
-
-```ts
-export const appCheckMiddleware = async (req, res, next) => {
- const token = req.headers['x-firebase-appcheck'];
- if (!token) return res.status(401).json({ error: 'Missing App Check token' });
- try {
-   await getAppCheck().verifyToken(token);
-   next();
- } catch {
-   res.status(401).json({ error: 'Invalid App Check token' });
- }
-};
-
-app.use(appCheckMiddleware); // apply globally
-```
-
-For Firestore and Realtime Database, toggle enforcement directly in the Firebase Console — no code changes needed.
-
-### Real-World Impact
-
-The difference is stark. Consider a `/register` endpoint before and after App Check enforcement:
-
-**Without App Check** — a bot operator decompiles your APK, extracts the API URL, and writes a script. There is nothing stopping automated request floods:
-
-```mermaid
-sequenceDiagram
-   participant Bot as Bot Script
-   participant API as Your API
-
-   Bot->>API: POST /register (no token)
-   API-->>Bot: 200 OK — account created
-   Bot->>API: POST /register (no token)
-   API-->>Bot: 200 OK — account created
-   Bot->>API: POST /register (no token)
-   API-->>Bot: 200 OK — account created
-   Note over Bot,API: 10,000 fake accounts per hour. Nothing stops it.
-```
-
-**With App Check enforced** — the middleware rejects any request without a valid attestation token. Bots cannot produce one:
-
-```mermaid
-sequenceDiagram
-   participant Bot as Bot Script
-   participant App as Real App
-   participant AC as App Check SDK
-   participant API as Your API + Middleware
-
-   Bot->>API: POST /register (no token)
-   API-->>Bot: 401 Unauthorized — rejected at middleware
-
-   App->>AC: getToken()
-   AC-->>App: Signed token (Play Integrity / App Attest)
-   App->>API: POST /register + X-Firebase-AppCheck header
-   API-->>App: 200 OK
-
-   Note over Bot: Cannot obtain a valid attestation token outside the app. Attack ends here.
-```
-
-Tokens are short-lived, rate-limited by the platform provider (Google Play Integrity, Apple App Attest), and tied to real device attestations. A bot running outside the app cannot obtain one.
-
-### Development Workflow
-
-Never ship the debug provider to production. Use environment-based configuration (as shown above) and store platform-specific debug tokens (`FIREBASE_DEBUG_TOKEN_ANDROID`, `FIREBASE_DEBUG_TOKEN_IOS`) in `.env` files that are gitignored. Register each token in the Firebase Console under **App Check > Apps > Manage debug tokens** — one entry per platform per environment.
-
 ---
-
-## 4. Sardine SDK — Transaction Fraud Prevention
-
->  Sardine collects behavioral signals (keystroke timing, swipe patterns, device fingerprint) during user flows and streams them to its risk engine. Your backend queries a risk score using the session key before approving a transaction. It closes the gap that device integrity and request attestation cannot address: *is this user behaving like a real human?*
-
-> **Who this section is for**: Sardine is purpose-built for **fintech and financial services** applications — payments, lending, KYC, account opening, and money movement. If your app doesn't operate in a financial context, JailMonkey and App Check are likely sufficient. For fintechs, Sardine fills the gap neither of those tools can address: *behavioral* risk at the user level.
-
-### What Sardine Provides
-
-[Sardine](https://www.sardine.ai) is a fraud and compliance platform built for financial products. Its React Native SDK provides **device intelligence and behavioral biometrics** that power real-time risk scoring for transactions and onboarding events.
-
-Unlike JailMonkey (device posture) and App Check (request legitimacy), Sardine operates at the **behavioral and transactional layer** — it understands *who* is doing something, not just *what device* they're on. Its capabilities include:
-
-- **Device fingerprinting**: Persistent, privacy-safe device identification across sessions
-- **Behavioral biometrics**: Keystroke dynamics, swipe patterns, interaction timing — detecting bots and account takeover attempts
-- **Risk scoring**: Real-time scores for onboarding, login, and payment events
-- **AML/KYC signals**: Behavioral signals that complement identity verification
-- **Network intelligence**: Detection of VPNs, proxies, Tor, and data center traffic
-- **Session context**: Aggregated device and behavioral data sent to Sardine's backend for risk decisioning
-
-### Installation
-
-```bash
-npm install @sardine-ai/react-native-sardine-sdk
-# or
-yarn add @sardine-ai/react-native-sardine-sdk
-```
-
-For iOS:
-
-```bash
-cd ios && pod install
-```
-
-### Initialization
-
-The SDK is set up through a `useSardine` custom hook. A UUID session key is generated client-side at startup and stored in React Context so it can be injected automatically as `X-Sardine-Session-Key` on every subsequent API request. The SDK is also **feature-flagged** — meaning you can roll it out gradually or turn it off instantly without a new app release, which is important for a production fraud tool.
-
-```ts
-import { Sardinesdk } from "@sardine-ai/react-native-sardine-sdk";
-import { v4 as uuidv4 } from 'uuid';
-
-const setupSardineSDK = async () => {
- if (!sardineEnabled) return; // feature-flag kill-switch
-
- const clientId = process.env.SARDINE_CLIENT_ID!;
- const environment = process.env.SARDINE_ENVIRONMENT as 'sandbox' | 'production';
- const sessionKey = uuidv4();
-
- setSardineSessionKey(sessionKey); // stored in context → auto-injected as request header
-
- await Sardinesdk.setupSDK({
-   clientId,
-   sessionKey,
-   environment,              // 'sandbox' | 'production'
-   enableBehaviorBiometrics: true,
-   enableClipboardTracking:  true,
-   enableFieldTracking:      true,
- });
-};
-```
-
-Call this once at app startup. The session key is then automatically attached to every API call via a Context provider, so your backend can correlate the device/behavioral signals with any incoming request.
-

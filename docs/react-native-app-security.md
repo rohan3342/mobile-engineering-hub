@@ -601,3 +601,63 @@ If your app already uses JailMonkey, the migration is straightforward — freeRA
 > Your `sendRiskSignalToBackend` utility function remains unchanged — it is called identically from both JailMonkey and freeRASP callbacks.
 
 ---
+
+## 4. Firebase App Check — Backend Abuse Protection
+
+>  App Check issues cryptographically signed **attestation tokens** proving a request came from your real, unmodified app on a real device. Your backend middleware rejects everything without a valid token — bots and scripts cannot obtain one from outside the app, so they never reach your business logic.
+
+### The Problem It Solves
+
+Even if your app is secure, your **backend APIs are exposed to the internet**. Nothing stops an attacker from extracting your API endpoints from the JS bundle and calling them directly — bypassing the app entirely. This enables:
+
+- Credential stuffing attacks against your auth endpoints
+- Scraping your database through your own API
+- Abusing Cloud Functions for spam or DDoS
+- Creating fake accounts at scale via automation
+
+Firebase App Check solves this by ensuring **only your legitimate app** can call your backend resources.
+
+### How App Check Works
+
+App Check issues a short-lived **attestation token** that your app must send with every request. Your backend verifies this token with Firebase before processing the request. Tokens are generated using platform-specific attestation providers:
+
+| Platform | Provider | What It Verifies |
+|---|---|---|
+| iOS | App Attest (DeviceCheck fallback) | Cryptographic proof from Apple that request comes from a genuine, unmodified app |
+| Android | Play Integrity (SafetyNet fallback) | Google's verdict on app integrity and device safety |
+| Web | reCAPTCHA Enterprise / v3 | Bot detection |
+| Debug | Debug provider | Local development only — never ship to production |
+
+The attestation token is opaque to your app — Firebase handles the validation. Your backend simply enforces that valid tokens must be present.
+
+```mermaid
+sequenceDiagram
+   participant App as React Native App
+   participant SDK as App Check SDK
+   participant Attest as Play Integrity / App Attest
+   participant FB as Firebase Servers
+   participant API as Your Backend API
+
+   App->>SDK: initializeAppCheck(provider)
+   SDK->>Attest: Request signed attestation
+   Attest-->>SDK: Signed attestation blob
+   SDK->>FB: Exchange attestation for token
+   FB-->>SDK: Short-lived App Check token
+   Note over SDK,App: Token cached & auto-refreshed
+
+   App->>API: Request + X-Firebase-AppCheck header
+   API->>FB: Admin SDK verifyToken(token)
+   FB-->>API: Valid / Invalid
+   alt Token valid
+       API-->>App: 200 OK
+   else Token missing or invalid
+       API-->>App: 401 Unauthorized
+   end
+```
+
+### What It Protects
+
+- **Firebase Realtime Database** and **Firestore** — enforce App Check in security rules
+- **Cloud Functions** — check tokens in function middleware
+- **Cloud Storage** — restrict read/write to attested apps
+- **Custom backends** — verify tokens manually using the Firebase Admin SDK

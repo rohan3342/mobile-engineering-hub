@@ -536,3 +536,68 @@ useEffect(() => {
  return () => blockScreenCapture(false);
 }, []);
 ```
+
+### Detection Flow
+
+```mermaid
+flowchart TD
+   A([App Startup]) --> B{isProd?}
+   B -- No / dev --> C([Checks skipped\nDev environment])
+   B -- Yes --> D[freeRASP initializes\ncontinuous periodic checks]
+   D --> E{privilegedAccess\nhooks or appIntegrity?}
+   E -- Yes --> BLOCK[Block app\nsend risk signal to backend]
+   E -- No --> F{simulator or\nunofficialStore?}
+   F -- Yes in prod --> BLOCK
+   F -- No --> G{debug or\nobfuscationIssues?}
+   G -- Yes --> RISK[Flag session\nsend backend signal]
+   G -- No --> I([App proceeds normally\nfreeRASP monitors continuously])
+   BLOCK --> J{killOnBypass\nenabled?}
+   J -- Yes --> KILL([Process terminated])
+   J -- No --> RESTRICT([Restrict features])
+```
+
+### Pricing and Free Tier Limitations
+
+| | freeRASP (Free) | RASP+ (Paid) |
+|---|---|---|
+| Download limit | **100,000** | Unlimited |
+| Data collection | Sent to Talsec database | Your infrastructure (or fully disabled) |
+| SDK binary | Universal — bypass scripts are more reusable | App-specific hardened binary |
+| AppiCrypt® API protection | ❌ | ✅ |
+| Enterprise SLA / support | Community | Enterprise SLA |
+| Fintech compliance features | Limited | Full |
+
+**Recommendation for production fintech apps**:
+
+- **Development and early testing**: the free tier is fine.
+- **Production at scale (> 100k downloads)**: budget for **RASP+** upfront. The free binary is also a universal binary — the same build is shared across all free-tier integrators, making community-developed bypass scripts more broadly applicable. RASP+ generates app-specific hardened binaries, raising the effort required to reverse-engineer or bypass significantly.
+- **If RASP+ cost is not yet justified**: JailMonkey has no download cap, no data collection, and covers the core device integrity signals. Keep JailMonkey as a baseline until you are ready to commit to freeRASP RASP+.
+
+### Migrating from JailMonkey to freeRASP
+
+If your app already uses JailMonkey, the migration is straightforward — freeRASP is a functional superset and every JailMonkey check maps directly to a freeRASP callback.
+
+| JailMonkey check | freeRASP callback | Notes |
+|---|---|---|
+| `isJailBroken()` / `trustFall()` | `privilegedAccess` | Equivalent coverage |
+| `hookDetected()` | `hooks` | Equivalent coverage |
+| `isDebuggedMode()` | `debug` | Equivalent coverage |
+| `AdbEnabled()` | `adbEnabled` | Android only |
+| `isMockingLocation()` | `locationSpoofing` | Android only |
+| *(no equivalent)* | `appIntegrity` | **New** — detects tampered or repackaged builds |
+| *(no equivalent)* | `unofficialStore` | **New** — detects sideloaded installs |
+| *(no equivalent)* | `killOnBypass` | **New** — process termination if RASP is bypassed |
+
+**Migration steps**:
+
+1. Remove `jail-monkey` from your dependencies.
+2. Install `freerasp-react-native` and run `pod install`.
+3. Replace the `useDeviceSecurity` hook body with `useFreeRasp` initialization.
+4. Map each previous `JailMonkey` check to the corresponding `actions` callback (table above).
+5. Add `appIntegrity` and `unofficialStore` callbacks with appropriate backend signals.
+6. Confirm `isProd: !__DEV__` and `killOnBypass: true` for production builds.
+7. Submit your signing certificate hash and bundle details per Talsec's [setup guide](https://docs.talsec.app/freerasp/wiki/getting-signing-certificate-hash).
+
+> Your `sendRiskSignalToBackend` utility function remains unchanged — it is called identically from both JailMonkey and freeRASP callbacks.
+
+---

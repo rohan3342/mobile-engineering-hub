@@ -342,3 +342,197 @@ sequenceDiagram
 ```
 
 ---
+
+## 3. freeRASP — Full Runtime Application Self-Protection
+
+> freeRASP is a **Runtime Application Self-Protection (RASP)** library by [Talsec](https://www.talsec.app) that significantly extends beyond JailMonkey's device integrity checks. It detects rooted/jailbroken devices, runtime hooks (Frida/Xposed), debugger attachment, emulators, unofficial app stores, **app integrity tampering** (repackaged or modified builds), obfuscation bypass, screen capture, VPN usage, time/location spoofing, and more — all through a single React Native hook with a unified callback API and a kill-on-bypass enforcement mode.
+
+> ⚠️ **Pricing caveat — read before integrating**: freeRASP is **freemium** software governed by a [Fair Usage Policy (FUP)](https://docs.talsec.app/freerasp/fair-usage-policy-fup). The free tier is **capped at 100,000 app downloads**. Beyond that threshold, you must upgrade to the paid **RASP+** plan. RASP+ also removes Talsec data collection, replaces the universal free binary with an **app-specific hardened binary** (significantly harder to bypass), and adds the **AppiCrypt®** API integrity cryptogram. For a banking or fintech app with a real user base, treat RASP+ as the realistic production target and budget for it accordingly.
+
+### freeRASP vs JailMonkey
+
+freeRASP is a strict superset of what JailMonkey provides. Both detect rooting, jailbreaking, emulators, and hook frameworks. freeRASP also adds:
+
+| Capability | JailMonkey | freeRASP |
+|---|---|---|
+| Root / Jailbreak detection | ✅ | ✅ |
+| Emulator detection | ✅ | ✅ |
+| Hook framework detection (Frida, Xposed) | ✅ | ✅ |
+| Debug mode detection | ✅ | ✅ |
+| ADB enabled detection | ✅ | ✅ |
+| **App integrity verification** (tamper detection) | ❌ | ✅ |
+| **Unofficial store detection** | ❌ | ✅ |
+| **Obfuscation issue detection** | ❌ | ✅ |
+| **Screen capture / screen recording detection + blocking** | ❌ | ✅ |
+| **System VPN detection** | ❌ | ✅ |
+| **Time spoofing detection** | ❌ | ✅ |
+| **Location spoofing detection** (Android) | ❌ | ✅ |
+| Unsecure Wi-Fi detection (Android) | ❌ | ✅ |
+| Automation framework detection (Android) | ❌ | ✅ |
+| Multi-instance detection (Android) | ❌ | ✅ |
+| **Kill-on-bypass enforcement** | ❌ | ✅ |
+| Malware detection (add-on module) | ❌ | ✅ |
+| Security dashboard portal (Talsec Portal) | ❌ | ✅ |
+
+The two critical additions over JailMonkey are **app integrity verification** — detecting whether your APK/IPA has been repackaged, resigned, or tampered with before reaching the user — and **kill-on-bypass**, which terminates the app process automatically if it detects an attacker manipulating or hooking the RASP threat callback mechanism itself.
+
+If your app already uses JailMonkey, freeRASP can replace it entirely — the root/jailbreak coverage is equivalent, and you gain the broader threat surface at the cost of the download cap.
+
+### Installation
+
+```bash
+npm install freerasp-react-native
+# or
+yarn add freerasp-react-native
+```
+
+For iOS, run pod install:
+
+```bash
+cd ios && pod install
+```
+
+**Android prerequisites** — freeRASP requires `minSdkVersion` ≥ 23 (Android 6.0) and Kotlin ≥ 2.0.0. In `android/build.gradle`:
+
+```groovy
+buildscript {
+   ext {
+       minSdkVersion = 23        // required minimum
+       kotlinVersion = '2.0.0'   // required since freeRASP 4.0.0
+   }
+   dependencies {
+       classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.0")
+   }
+}
+```
+
+**Android — screen capture detection** (optional, requires Android 14+ / 15+):
+
+Add to `AndroidManifest.xml` inside the `<manifest>` root tag:
+
+```xml
+<uses-permission android:name="android.permission.DETECT_SCREEN_CAPTURE" />
+<uses-permission android:name="android.permission.DETECT_SCREEN_RECORDING" />
+```
+
+### Configuration
+
+Initialize freeRASP at your app entry point using the `useFreeRasp` hook. Get your Android signing certificate hash by following Talsec's [signing certificate guide](https://docs.talsec.app/freerasp/wiki/getting-signing-certificate-hash).
+
+```ts
+import { useFreeRasp } from 'freerasp-react-native';
+
+const config = {
+ androidConfig: {
+   packageName: 'com.yourapp',
+   certificateHashes: ['YOUR_BASE64_SIGNING_CERT_HASH='], // release signing cert hash(es)
+   supportedAlternativeStores: ['com.sec.android.app.samsungapps'],
+ },
+ iosConfig: {
+   appBundleId: 'com.yourapp',
+   appTeamId: 'YOUR_APPLE_TEAM_ID',
+ },
+ watcherMail: 'security@yourcompany.com', // receives Talsec Portal reports and SDK updates
+ isProd: !__DEV__,    // false in development — skips production checks on simulator
+ killOnBypass: true,  // terminate the app if RASP callbacks are hooked or tampered with
+};
+```
+
+Key configuration notes:
+
+- **`isProd`**: Set to `false` in development so you are not blocked on a simulator. In production, all checks run. See [Talsec's `isProd` documentation](https://docs.talsec.app/freerasp/wiki/isprod-flag).
+- **`killOnBypass: true`**: The SDK will terminate the process if it detects an attacker manipulating the threat callback mechanism. This is the anti-tamper enforcement layer on top of detection.
+- **`watcherMail`**: Required. Used for Talsec Portal access and security report delivery.
+
+### Threat Detection and Reactions
+
+Define a callback object mapping each detected threat to a response. At minimum, log the event and send a risk signal to your backend. For the highest-severity threats in a financial app, block or terminate:
+
+```ts
+const actions = {
+ // ── High severity: block app access and signal backend ─────────────────────
+ privilegedAccess: () => {
+   // Rooted (Android) or jailbroken (iOS)
+   sendRiskSignalToBackend('privileged_access');
+   setIsDeviceSecure(false);
+ },
+ hooks: () => {
+   // Frida, Xposed, or other hook framework detected
+   sendRiskSignalToBackend('hook_detected');
+   setIsDeviceSecure(false);
+ },
+ appIntegrity: () => {
+   // APK/IPA has been tampered with or repackaged
+   sendRiskSignalToBackend('app_integrity_fail');
+   setIsDeviceSecure(false);
+ },
+ debug: () => {
+   // Debugger attached or debug mode active
+   sendRiskSignalToBackend('debug_mode');
+   setIsDeviceSecure(false);
+ },
+
+ // ── Medium severity: flag session, send backend signal ──────────────────────
+ simulator: () => {
+   sendRiskSignalToBackend('simulator');
+   if (!__DEV__) setIsDeviceSecure(false);
+ },
+ unofficialStore: () => {
+   // App was not installed from an official store — possible repackaging
+   sendRiskSignalToBackend('unofficial_store');
+ },
+ obfuscationIssues: () => {
+   // Android only — app was shipped without obfuscation, leaking business logic
+   sendRiskSignalToBackend('obfuscation_issues');
+ },
+
+ // ── Runtime environment signals ─────────────────────────────────────────────
+ systemVPN: () => sendRiskSignalToBackend('vpn_active'),
+ devMode: () => sendRiskSignalToBackend('dev_mode'),         // Android
+ adbEnabled: () => sendRiskSignalToBackend('adb_enabled'),   // Android
+ timeSpoofing: () => sendRiskSignalToBackend('time_spoofing'),
+ locationSpoofing: () => sendRiskSignalToBackend('location_spoofing'), // Android
+
+ // ── Screen capture — block for sensitive screens (account details, KYC) ─────
+ screenshot: () => console.warn('Screenshot taken on sensitive screen'),
+ screenRecording: () => console.warn('Screen recording active on sensitive screen'),
+
+ // ── Device state signals ────────────────────────────────────────────────────
+ passcode: () => sendRiskSignalToBackend('no_passcode_set'),
+ secureHardwareNotAvailable: () => sendRiskSignalToBackend('no_secure_hardware'),
+ deviceBinding: () => sendRiskSignalToBackend('device_binding_fail'),
+ deviceID: () => sendRiskSignalToBackend('device_id_fail'), // iOS only
+
+ // ── Android-only signals ────────────────────────────────────────────────────
+ unsecureWifi: () => sendRiskSignalToBackend('unsecure_wifi'),
+ automation: () => sendRiskSignalToBackend('automation_detected'),
+ multiInstance: () => sendRiskSignalToBackend('multi_instance'),
+};
+
+// Optional: callback when all initial startup checks are complete
+const raspExecutionStateActions = {
+ allChecksFinished: () => {
+   console.log('freeRASP initial checks complete');
+ },
+};
+
+// Start freeRASP — call outside useEffect, at component top level
+// freeRASP runs continuous periodic checks throughout the app lifecycle
+useFreeRasp(config, actions, raspExecutionStateActions);
+```
+
+> **Important**: `useFreeRasp` must be called at the component top level, **not** inside `useEffect`. freeRASP performs continuous checks throughout the session — not just at startup.
+
+### Proactive Screen Capture Blocking
+
+Beyond detecting screenshots, freeRASP can **actively prevent** screen capture on sensitive screens such as account numbers, card details, KYC documents, and transaction confirmations:
+
+```ts
+import { blockScreenCapture, isScreenCaptureBlocked } from 'freerasp-react-native';
+
+// Block screen capture when a sensitive screen mounts, restore on unmount
+useEffect(() => {
+ blockScreenCapture(true);
+ return () => blockScreenCapture(false);
+}, []);
+```

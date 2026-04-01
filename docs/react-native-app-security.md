@@ -685,3 +685,33 @@ In your `AppDelegate.swift`, no changes are needed beyond standard Firebase setu
 **Android — Configure Play Integrity**:
 
 Ensure your app is published (even as an internal test track) in the Google Play Console. Play Integrity requires a real Google Play-distributed app to issue valid tokens.
+
+### Initialization Code
+
+Configure the provider once at module load — not inside a component or hook body. Use platform-specific debug tokens so each environment can be registered separately in the Firebase Console.
+
+```ts
+import { ReactNativeFirebaseAppCheckProvider, initializeAppCheck } from "@react-native-firebase/app-check";
+import { getApp } from "@react-native-firebase/app";
+
+const rnfbProvider = new ReactNativeFirebaseAppCheckProvider();
+
+rnfbProvider.configure({
+ android: {
+   provider: __DEV__ ? "debug" : "playIntegrity",
+   debugToken: process.env.FIREBASE_DEBUG_TOKEN_ANDROID,
+ },
+ apple: {
+   provider: __DEV__ ? "debug" : "appAttest",
+   debugToken: process.env.FIREBASE_DEBUG_TOKEN_IOS,
+ },
+});
+
+export const initAppCheck = async () =>
+ initializeAppCheck(getApp(), {
+   provider: rnfbProvider,
+   isTokenAutoRefreshEnabled: true,
+ });
+```
+
+From here, call `initAppCheck()` before your first authenticated request, then retrieve the token and set it as the `X-Firebase-AppCheck` header on your shared API client. Wrap the retrieval in a retry loop with a short delay — Play Integrity token requests can transiently fail on Android cold starts.

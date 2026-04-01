@@ -715,3 +715,38 @@ export const initAppCheck = async () =>
 ```
 
 From here, call `initAppCheck()` before your first authenticated request, then retrieve the token and set it as the `X-Firebase-AppCheck` header on your shared API client. Wrap the retrieval in a retry loop with a short delay — Play Integrity token requests can transiently fail on Android cold starts.
+
+### Attaching the App Check Token to API Requests
+
+After initializing App Check, attach the token automatically to every outbound request via an Axios interceptor. This centralizes token management — token refresh, retry logic, and error handling — in one place rather than at every call site.
+
+```ts
+import appCheck from '@react-native-firebase/app-check';
+
+// Retry helper for Play Integrity cold-start failures (Android only)
+const getAppCheckTokenWithRetry = async (maxAttempts = 3): Promise<string> => {
+ for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+   try {
+     const { token } = await appCheck().getToken(/* forceRefresh */ false);
+     return token;
+   } catch (err) {
+     if (attempt === maxAttempts) throw err;
+     await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); // 1s, 2s backoff
+   }
+ }
+ throw new Error('App Check token unavailable after retries');
+};
+
+// Register once at app startup — before any authenticated requests
+apiClient.interceptors.request.use(async (config) => {
+ try {
+   const token = await getAppCheckTokenWithRetry();
+   config.headers['X-Firebase-AppCheck'] = token;
+ } catch (err) {
+   // Token unavailable — let the request proceed; backend will reject with 401
+   // This avoids blocking legitimate requests during transient provider outages
+   console.warn('[AppCheck] Token retrieval failed — request will be rejected by backend', err);
+ }
+ return config;
+});
+```

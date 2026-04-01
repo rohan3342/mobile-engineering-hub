@@ -750,3 +750,33 @@ apiClient.interceptors.request.use(async (config) => {
  return config;
 });
 ```
+
+**Token lifecycle notes**:
+
+- `isTokenAutoRefreshEnabled: true` (set during `initializeAppCheck`) causes the SDK to proactively refresh before expiry — you do not need to call `getToken(true)` on every request in normal operation.
+- `getToken(false)` returns the cached token or waits for an in-progress refresh — it does not make a network call on each request.
+- Only force-refresh (`getToken(true)`) after receiving a 401 that signals an expired token, or during explicit session renewal.
+
+```mermaid
+sequenceDiagram
+   participant App as RN App
+   participant Interceptor as Axios Interceptor
+   participant SDK as App Check SDK
+   participant Cache as Token Cache
+   participant API as Your Backend
+
+   Note over SDK,Cache: Auto-refresh runs silently in background
+
+   App->>Interceptor: API request initiated
+   Interceptor->>SDK: getToken(false)
+   SDK->>Cache: Check cached token
+   alt Token valid and not near expiry
+       Cache-->>SDK: Return cached token
+   else Token expired or missing
+       SDK->>SDK: Exchange with Play Integrity / App Attest
+       SDK-->>Cache: Store refreshed token
+   end
+   SDK-->>Interceptor: Token string
+   Interceptor->>API: Request + X-Firebase-AppCheck: <token>
+   API-->>App: 200 OK (or 401 if token invalid)
+```

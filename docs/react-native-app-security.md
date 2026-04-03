@@ -780,3 +780,66 @@ sequenceDiagram
    Interceptor->>API: Request + X-Firebase-AppCheck: <token>
    API-->>App: 200 OK (or 401 if token invalid)
 ```
+
+### Enforcing App Check on Your Backend
+
+For a custom Node.js/Express backend, verify the token in middleware before any route handler runs:
+
+```ts
+export const appCheckMiddleware = async (req, res, next) => {
+ const token = req.headers['x-firebase-appcheck'];
+ if (!token) return res.status(401).json({ error: 'Missing App Check token' });
+ try {
+   await getAppCheck().verifyToken(token);
+   next();
+ } catch {
+   res.status(401).json({ error: 'Invalid App Check token' });
+ }
+};
+
+app.use(appCheckMiddleware); // apply globally
+```
+
+For Firestore and Realtime Database, toggle enforcement directly in the Firebase Console — no code changes needed.
+
+### Real-World Impact
+
+The difference is stark. Consider a `/register` endpoint before and after App Check enforcement:
+
+**Without App Check** — a bot operator decompiles your APK, extracts the API URL, and writes a script. There is nothing stopping automated request floods:
+
+```mermaid
+sequenceDiagram
+   participant Bot as Bot Script
+   participant API as Your API
+
+   Bot->>API: POST /register (no token)
+   API-->>Bot: 200 OK — account created
+   Bot->>API: POST /register (no token)
+   API-->>Bot: 200 OK — account created
+   Bot->>API: POST /register (no token)
+   API-->>Bot: 200 OK — account created
+   Note over Bot,API: 10,000 fake accounts per hour. Nothing stops it.
+```
+
+**With App Check enforced** — the middleware rejects any request without a valid attestation token. Bots cannot produce one:
+
+```mermaid
+sequenceDiagram
+   participant Bot as Bot Script
+   participant App as Real App
+   participant AC as App Check SDK
+   participant API as Your API + Middleware
+
+   Bot->>API: POST /register (no token)
+   API-->>Bot: 401 Unauthorized — rejected at middleware
+
+   App->>AC: getToken()
+   AC-->>App: Signed token (Play Integrity / App Attest)
+   App->>API: POST /register + X-Firebase-AppCheck header
+   API-->>App: 200 OK
+
+   Note over Bot: Cannot obtain a valid attestation token outside the app. Attack ends here.
+```
+
+Tokens are short-lived, rate-limited by the platform provider (Google Play Integrity, Apple App Attest), and tied to real device attestations. A bot running outside the app cannot obtain one.

@@ -855,3 +855,16 @@ Never ship the debug provider to production. Use environment-based configuration
 >  Sardine collects behavioral signals (keystroke timing, swipe patterns, device fingerprint) during user flows and streams them to its risk engine. Your backend queries a risk score using the session key before approving a transaction. It closes the gap that device integrity and request attestation cannot address: *is this user behaving like a real human?*
 
 > **Who this section is for**: Sardine is purpose-built for **fintech and financial services** applications — payments, lending, KYC, account opening, and money movement. If your app doesn't operate in a financial context, JailMonkey and App Check are likely sufficient. For fintechs, Sardine fills the gap neither of those tools can address: *behavioral* risk at the user level.
+
+### What Sardine Provides
+
+[Sardine](https://www.sardine.ai) is a fraud and compliance platform built for financial products. Its React Native SDK provides **device intelligence and behavioral biometrics** that power real-time risk scoring for transactions and onboarding events.
+
+Unlike JailMonkey (device posture) and App Check (request legitimacy), Sardine operates at the **behavioral and transactional layer** — it understands *who* is doing something, not just *what device* they're on. Its capabilities include:
+
+- **Device fingerprinting**: Persistent, privacy-safe device identification across sessions
+- **Behavioral biometrics**: Keystroke dynamics, swipe patterns, interaction timing — detecting bots and account takeover attempts
+- **Risk scoring**: Real-time scores for onboarding, login, and payment events
+- **AML/KYC signals**: Behavioral signals that complement identity verification
+- **Network intelligence**: Detection of VPNs, proxies, Tor, and data center traffic
+- **Session context**: Aggregated device and behavioral data sent to Sardine's backend for risk decisioning

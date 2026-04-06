@@ -988,3 +988,36 @@ sequenceDiagram
        API-->>App: Blocked or step-up required
    end
 ```
+
+### Backend Risk Decision Logic
+
+Your backend receives the Sardine risk level alongside every transaction or onboarding request. Map each level to a distinct business action — a binary allow/block is too coarse. `medium` risk should trigger step-up authentication rather than outright rejection; `high` should queue for human review rather than silently failing.
+
+```mermaid
+flowchart TD
+   REQ([Incoming Request\nPOST /payments or /onboarding]) --> APPCHECK{App Check\ntoken valid?}
+   APPCHECK -- No --> REJECT401([401 Unauthorized\nMissing or invalid attestation])
+   APPCHECK -- Yes --> SARDINE{Sardine risk\nlevel?}
+
+   SARDINE -- low --> APPROVE([Approve and process])
+   SARDINE -- medium --> MFA{Step-up MFA\nalready completed\nthis session?}
+   MFA -- Yes --> APPROVE
+   MFA -- No --> STEPUP([Return 202 + step-up challenge\nSMS OTP · biometric re-auth])
+   STEPUP --> CHALLENGE{Challenge\npassed?}
+   CHALLENGE -- Yes --> APPROVE
+   CHALLENGE -- No --> REJECT([Reject request])
+   SARDINE -- high --> REVIEW([Queue for manual review\nHold transaction · notify compliance])
+   SARDINE -- very_high --> REJECT
+```
+
+This decision tree gives your risk team actionable signal at every level:
+
+| Risk Level | Recommended Action | Rationale |
+|---|---|---|
+| `low` | Approve directly | Normal user behavior, known device |
+| `medium` | Step-up authentication | Unusual signals but likely legitimate — add friction, preserve UX |
+| `high` | Manual review queue | Borderline — preserve human judgment, do not auto-reject |
+| `very_high` | Automatic rejection | High confidence of fraud or bot — reject immediately |
+
+---
+

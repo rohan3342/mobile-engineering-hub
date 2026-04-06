@@ -952,3 +952,39 @@ const res = await sardineApi.get('/v1/devices/session', {
 });
 const { level } = res.data; // 'low' | 'medium' | 'high' | 'very_high'
 ```
+
+### Why Sardine Complements the Other Layers
+
+JailMonkey tells you the device is clean. App Check tells you the request came from your app. But neither tells you whether the *person* behind the request is a fraudster posing as a legitimate user. Sardine closes this gap by continuously analyzing behavioral signals — a human typing naturally vs. a script filling fields instantly, a real user's swipe velocity vs. an automated flow, a known device vs. a freshly provisioned emulator farm.
+
+This is especially valuable for:
+
+- **Account creation fraud**: Detecting fake signups before they consume KYC credits
+- **Account takeover**: Flagging login attempts that look automated or show abnormal timing
+- **Payment fraud**: Scoring transactions before they are submitted for processing
+- **Identity fraud**: Correlating device signals with identity data to surface synthetic identities
+
+```mermaid
+sequenceDiagram
+   participant App as React Native App
+   participant SDK as Sardine SDK
+   participant Ctx as Session Context
+   participant API as Your Backend
+   participant Sardine as Sardine API
+
+   App->>App: Generate UUID session key
+   App->>SDK: setupSDK(clientId, sessionKey)
+   App->>Ctx: Store session key
+   Note over App,Ctx: User navigates and interacts
+   App->>SDK: trackPage(), trackTextChange(), trackFocusChange()
+   SDK-->>Sardine: Behavioral signals streamed
+   App->>SDK: submitData()
+   App->>API: Request + X-Sardine-Session-Key header
+   API->>Sardine: GET /v1/devices/session?session_key=...
+   Sardine-->>API: level: low / medium / high / very_high
+   alt Low or Medium risk
+       API-->>App: Approved
+   else High or Very High risk
+       API-->>App: Blocked or step-up required
+   end
+```

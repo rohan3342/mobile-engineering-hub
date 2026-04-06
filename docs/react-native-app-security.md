@@ -868,3 +868,47 @@ Unlike JailMonkey (device posture) and App Check (request legitimacy), Sardine o
 - **AML/KYC signals**: Behavioral signals that complement identity verification
 - **Network intelligence**: Detection of VPNs, proxies, Tor, and data center traffic
 - **Session context**: Aggregated device and behavioral data sent to Sardine's backend for risk decisioning
+
+### Installation
+
+```bash
+npm install @sardine-ai/react-native-sardine-sdk
+# or
+yarn add @sardine-ai/react-native-sardine-sdk
+```
+
+For iOS:
+
+```bash
+cd ios && pod install
+```
+
+### Initialization
+
+The SDK is set up through a `useSardine` custom hook. A UUID session key is generated client-side at startup and stored in React Context so it can be injected automatically as `X-Sardine-Session-Key` on every subsequent API request. The SDK is also **feature-flagged** — meaning you can roll it out gradually or turn it off instantly without a new app release, which is important for a production fraud tool.
+
+```ts
+import { Sardinesdk } from "@sardine-ai/react-native-sardine-sdk";
+import { v4 as uuidv4 } from 'uuid';
+
+const setupSardineSDK = async () => {
+ if (!sardineEnabled) return; // feature-flag kill-switch
+
+ const clientId = process.env.SARDINE_CLIENT_ID!;
+ const environment = process.env.SARDINE_ENVIRONMENT as 'sandbox' | 'production';
+ const sessionKey = uuidv4();
+
+ setSardineSessionKey(sessionKey); // stored in context → auto-injected as request header
+
+ await Sardinesdk.setupSDK({
+   clientId,
+   sessionKey,
+   environment,              // 'sandbox' | 'production'
+   enableBehaviorBiometrics: true,
+   enableClipboardTracking:  true,
+   enableFieldTracking:      true,
+ });
+};
+```
+
+Call this once at app startup. The session key is then automatically attached to every API call via a Context provider, so your backend can correlate the device/behavioral signals with any incoming request.

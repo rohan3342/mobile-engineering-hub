@@ -912,3 +912,43 @@ const setupSardineSDK = async () => {
 ```
 
 Call this once at app startup. The session key is then automatically attached to every API call via a Context provider, so your backend can correlate the device/behavioral signals with any incoming request.
+
+### Session Key Propagation
+
+The session key is what connects client-side behavioral signals to server-side risk decisioning. Store it in a React Context and inject it as a header on your API client:
+
+```tsx
+// In your API request init override
+return async (requestContext) => ({
+ ...requestContext.init,
+ headers: {
+   ...(requestContext.init.headers || {}),
+   "X-Sardine-Session-Key": sessionKey,
+ },
+});
+```
+
+Your backend receives this header on every request and uses it to query Sardine for the current session's risk score.
+
+### Behavioral Tracking
+
+Once the SDK is set up, instrument your screens and inputs to feed Sardine continuous behavioral signals:
+
+```ts
+const { trackPage, trackTextChange, trackFocusChange, updateOptions, submitData } = useSardine();
+
+await trackPage('OnboardingScreen');               // on screen mount
+await trackTextChange('email', value);             // on input change
+await trackFocusChange('email', isFocused);        // on focus/blur
+await updateOptions({ userIdHash: id, flow: 'onboarding' }); // after identity is known
+await submitData();                                // before the backend decision call
+```
+
+On the backend, use the `X-Sardine-Session-Key` header to retrieve the session's risk score before approving the transaction or onboarding step:
+
+```ts
+const res = await sardineApi.get('/v1/devices/session', {
+ params: { session_key: req.headers['x-sardine-session-key'] },
+});
+const { level } = res.data; // 'low' | 'medium' | 'high' | 'very_high'
+```

@@ -1021,3 +1021,37 @@ This decision tree gives your risk team actionable signal at every level:
 
 ---
 
+## 6. Securing Data at Rest and Authentication
+
+>  Use **encrypted MMKV** for session metadata and security flags, **Keychain** for passwords and tokens, and **Biometrics** as the physical presence gate before Keychain releases credentials. Never store passwords in plain MMKV or AsyncStorage — on a rooted device, those files are readable by any process.
+
+JailMonkey, App Check, and Sardine all operate at the network or runtime level. But what about data that is **already stored on the device**? If a user's credentials, tokens, or flags are written to unencrypted local storage, a rooted device makes that data trivially readable — regardless of how well you secured the network traffic that delivered it.
+
+Three libraries close this gap, each protecting a different sensitivity tier:
+
+```mermaid
+flowchart TB
+   subgraph T1["Tier 3 — Plaintext Filesystem  (non-sensitive only)"]
+       direction LR
+       T1A["AsyncStorage / unencrypted MMKV\nReadable by any process on rooted device"]
+       T1B["UI preferences · theme · locale\nnon-sensitive feature flags"]
+   end
+
+   subgraph T2["Tier 2 — AES-256 Encrypted File  (session metadata)"]
+       direction LR
+       T2A["MMKV withEncryption()\nKey stored in Android Keystore / iOS Secure Enclave"]
+       T2B["Session tokens · device IDs\nbiometric flags · access-control timestamps"]
+   end
+
+   subgraph T3["Tier 1 — Hardware Secure Enclave  (credentials)"]
+       direction LR
+       T3A["iOS Keychain / Android Keystore\nNever written to filesystem\nBiometric challenge required to read"]
+       T3B["Passwords · auth credentials\nprivate keys · refresh tokens"]
+   end
+
+   T1 -- migrate security-relevant data up --> T2
+   T2 -- migrate credentials up --> T3
+```
+
+---
+

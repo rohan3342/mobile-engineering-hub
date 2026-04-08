@@ -1089,3 +1089,37 @@ When `withEncryption()` is used, MMKV generates and stores the encryption key in
 | Passwords, auth tokens, biometric-protected secrets | Keychain (see below) |
 
 > **Note**: The default `new MMKVLoader().initialize()` creates an unencrypted store. For any data that is security-relevant — session tokens, device identifiers, biometric enrollment flags, or access-control timestamps — use the encrypted instance in production.
+
+#### Migrating from AsyncStorage to Encrypted MMKV
+
+If your app currently stores data in `@react-native-async-storage/async-storage`, a one-time migration at the next app version is the cleanest path to encrypted-at-rest storage. The migration is **idempotent** — it is safe to run on every startup until the flag confirms completion:
+
+```ts
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { MMKVLoader } from 'react-native-mmkv-storage';
+
+const MIGRATION_KEY = 'ASYNC_STORAGE_MIGRATED_V1';
+
+export const migrateAsyncStorageToMMKV = async (
+ secureStorage: ReturnType<MMKVLoader['initialize']>,
+): Promise<void> => {
+ if (secureStorage.getBool(MIGRATION_KEY)) return; // already done
+
+ const keys = await AsyncStorage.getAllKeys();
+ const entries = await AsyncStorage.multiGet(keys);
+
+ for (const [key, value] of entries) {
+   if (value !== null) secureStorage.setString(key, value);
+ }
+
+ // Write the flag BEFORE clearing — if clearing fails on retry, writes are idempotent
+ secureStorage.setBool(MIGRATION_KEY, true);
+ await AsyncStorage.multiRemove(keys);
+};
+```
+
+Run this once at app startup, before any reads from the new store. After the migration is confirmed stable across app versions, you can remove the AsyncStorage dependency entirely.
+
+> After migrating, add an ESLint rule (`no-restricted-imports`) to ban direct `@react-native-async-storage/async-storage` imports and prevent accidental regressions.
+
+---

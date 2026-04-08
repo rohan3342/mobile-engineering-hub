@@ -1123,3 +1123,16 @@ Run this once at app startup, before any reads from the new store. After the mig
 > After migrating, add an ESLint rule (`no-restricted-imports`) to ban direct `@react-native-async-storage/async-storage` imports and prevent accidental regressions.
 
 ---
+
+### react-native-keychain — Hardware-Backed Credential Storage
+
+[`react-native-keychain`](https://github.com/oblador/react-native-keychain) stores credentials in the platform's **hardware-backed secure storage** — iOS Keychain and Android Keystore. Unlike MMKV, Keychain data is never written to the regular filesystem and is protected by the device's secure hardware even on rooted devices.
+
+#### Why it matters
+
+Passwords and auth credentials should never live in MMKV, AsyncStorage, or any file-based store. Keychain entries can be bound to:
+
+- **Device availability** (`ACCESSIBLE.WHEN_UNLOCKED`) — data unreadable when device is locked
+- **Biometric authentication** (`ACCESS_CONTROL.BIOMETRY_ANY`) — data retrieval requires FaceID/fingerprint
+- **Hardware attestation** — prevents extraction even on compromised devices
+

@@ -1062,3 +1062,30 @@ flowchart TB
 #### Why it matters
 
 Apps routinely store flags, user preferences, session metadata, and even partial credentials in local storage. On a rooted Android device or a jailbroken iPhone, any unencrypted storage file can be read directly from the filesystem. Encryption at rest ensures that even if storage is extracted, the contents are unreadable without the key.
+
+#### Default vs. encrypted initialization
+
+```ts
+import { MMKVLoader } from 'react-native-mmkv-storage';
+
+// ❌ Default — unencrypted, fine for non-sensitive data
+const storage = new MMKVLoader().initialize();
+
+// ✅ Encrypted — recommended for anything security-relevant
+const secureStorage = new MMKVLoader().withEncryption().initialize();
+
+// ✅ Custom key — useful when you derive the key from a user secret or device ID
+const secureStorage = new MMKVLoader().encryptWithCustomKey('your-derived-key').initialize();
+```
+
+When `withEncryption()` is used, MMKV generates and stores the encryption key in the platform's secure enclave (Android Keystore / iOS Secure Enclave). With `encryptWithCustomKey`, you supply the key yourself — useful if you derive it from a user credential or a value from Keychain.
+
+#### What to store where
+
+| Data | Storage |
+|---|---|
+| UI preferences, feature flags, locale | Unencrypted MMKV |
+| Session metadata, device IDs, security flags | Encrypted MMKV |
+| Passwords, auth tokens, biometric-protected secrets | Keychain (see below) |
+
+> **Note**: The default `new MMKVLoader().initialize()` creates an unencrypted store. For any data that is security-relevant — session tokens, device identifiers, biometric enrollment flags, or access-control timestamps — use the encrypted instance in production.

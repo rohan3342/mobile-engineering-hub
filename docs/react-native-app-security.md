@@ -1194,3 +1194,44 @@ const { success } = await rnBiometrics.simplePrompt({
 // Check whether biometric keys have been created for this app
 const { keysExist } = await rnBiometrics.biometricKeysExist();
 ```
+
+#### How it connects to Keychain
+
+Biometrics and Keychain work together — they are not alternatives:
+
+1. **On login**: after a successful username/password auth, call `saveCredentials` to store credentials in Keychain with `BIOMETRY_ANY` access control.
+2. **On app resume / startup**: call `Keychain.getGenericPassword()` — the OS automatically presents the biometric prompt before releasing the stored credential.
+3. **On failure or cancellation**: fall through to the password login screen.
+
+```ts
+// useBiometrics.ts — access credentials using biometric gate
+const accessCredentials = async () => {
+ // This call internally triggers the biometric prompt
+ // because the Keychain entry was saved with BIOMETRY_ANY
+ const credentials = await Keychain.getGenericPassword({
+   authenticationPrompt: { title: 'Confirm your identity' },
+   service: KEYCHAIN_SERVICE,
+ });
+ return credentials || undefined;
+};
+```
+
+You don't call `rnBiometrics.simplePrompt()` and then separately call Keychain — the biometric challenge is **embedded in the Keychain retrieval** when the entry was stored with the right access control flags. `simplePrompt()` is used separately when you need a biometric gate without credential retrieval (e.g., authorizing a payment action).
+
+```mermaid
+flowchart TD
+   A([User logs in with password]) --> B[Auth success]
+   B --> C["saveCredentials\nKeychain.setGenericPassword\nBIOMETRY_ANY + WHEN_UNLOCKED"]
+   C --> D[(Credentials in\nhardware-backed secure enclave)]
+
+   E([App launched or resumed]) --> F{Keychain entry\nexists?}
+   F -- No --> G([Show password login])
+   G --> A
+   F -- Yes --> H["Keychain.getGenericPassword\nauthenticationPrompt"]
+   H --> I([OS: Face ID / Touch ID / PIN])
+   I -- Cancelled or Failed --> G
+   I -- Authenticated --> J[Credentials released\nfrom secure enclave]
+   J --> K([Auto-login user])
+```
+
+---

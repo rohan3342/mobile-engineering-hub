@@ -1170,3 +1170,27 @@ The combination of `BIOMETRY_ANY` + `WHEN_UNLOCKED` means the OS will **not rele
 #### Why it matters
 
 Without a biometric gate, credentials stored in Keychain could be accessed programmatically by any process running as that app's user on a rooted device. With biometrics enforced, accessing credentials requires physical user presence — the attacker would need to hold the device to the user's face or finger.
+
+#### Setup and usage
+
+```ts
+import ReactNativeBiometrics from 'react-native-biometrics';
+
+// Initialize once at your app root — allowDeviceCredentials falls back
+// to PIN/password if biometrics aren't enrolled
+export const rnBiometrics = new ReactNativeBiometrics({
+ allowDeviceCredentials: true,
+});
+
+// Check what biometric hardware is available
+const { biometryType, available } = await rnBiometrics.isSensorAvailable();
+// biometryType: 'FaceID' | 'TouchID' | 'Biometrics' | undefined
+
+// Trigger a simple biometric prompt (no signature)
+const { success } = await rnBiometrics.simplePrompt({
+ promptMessage: 'Confirm your identity',
+});
+
+// Check whether biometric keys have been created for this app
+const { keysExist } = await rnBiometrics.biometricKeysExist();
+```

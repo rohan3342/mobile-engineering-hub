@@ -1162,3 +1162,11 @@ await Keychain.resetGenericPassword({ service: 'com.yourapp.credentials' });
 The combination of `BIOMETRY_ANY` + `WHEN_UNLOCKED` means the OS will **not release the credential** unless the device is unlocked and the biometric challenge is passed. This is the highest practical protection level for stored credentials in a React Native app.
 
 ---
+
+### react-native-biometrics — Biometric Authentication Gate
+
+[`react-native-biometrics`](https://github.com/SelfLearningIO/react-native-biometrics) provides a clean interface over Face ID, Touch ID, and Android biometrics. Used alongside Keychain, it forms the **authentication gate** that controls when stored credentials can be accessed.
+
+#### Why it matters
+
+Without a biometric gate, credentials stored in Keychain could be accessed programmatically by any process running as that app's user on a rooted device. With biometrics enforced, accessing credentials requires physical user presence — the attacker would need to hold the device to the user's face or finger.

@@ -1136,3 +1136,29 @@ Passwords and auth credentials should never live in MMKV, AsyncStorage, or any f
 - **Biometric authentication** (`ACCESS_CONTROL.BIOMETRY_ANY`) — data retrieval requires FaceID/fingerprint
 - **Hardware attestation** — prevents extraction even on compromised devices
 
+#### Implementation
+
+```ts
+import * as Keychain from 'react-native-keychain';
+
+// Store credentials — only accessible after biometric authentication
+await Keychain.setGenericPassword(email, password, {
+ service: 'com.yourapp.credentials',
+ accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_ANY,
+ authenticationType: Keychain.AUTHENTICATION_TYPE.BIOMETRICS,
+ accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED,
+});
+
+// Retrieve credentials — triggers biometric prompt automatically
+const credentials = await Keychain.getGenericPassword({
+ authenticationPrompt: { title: 'Confirm your identity' },
+ service: 'com.yourapp.credentials',
+});
+
+// Clear credentials on logout
+await Keychain.resetGenericPassword({ service: 'com.yourapp.credentials' });
+```
+
+The combination of `BIOMETRY_ANY` + `WHEN_UNLOCKED` means the OS will **not release the credential** unless the device is unlocked and the biometric challenge is passed. This is the highest practical protection level for stored credentials in a React Native app.
+
+---

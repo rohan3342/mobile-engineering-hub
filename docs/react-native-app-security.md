@@ -1389,3 +1389,107 @@ openssl x509 -in api_cert.pem -pubkey -noout \
 Native-level pinning is enforced by the OS network stack and applies to all connections made by the app, including connections from native modules — not just calls routed through the JS `fetch()` API.
 
 ---
+
+### API Payload Encryption
+
+TLS protects data between the client and the TLS termination point (typically your load balancer or CDN edge). Beyond that point — across internal service hops, logging pipelines, or CDN nodes — the payload may travel unencrypted. For highly sensitive data (financial credentials, PII, identity documents), end-to-end payload encryption provides a defense-in-depth layer beyond transport security.
+
+**When to consider it:**
+- Transmitting credentials, tokens, or secrets in request bodies
+- Sending financial account numbers, card data, or identity documents
+- Compliance requirements mandating end-to-end encryption (certain PCI DSS, HIPAA contexts)
+- Protecting against TLS inspection by enterprise MDM proxies on managed devices
+
+**Pattern: AES-256-GCM symmetric encryption with asymmetric key exchange**
+
+Why two algorithms? RSA is too slow to encrypt large payloads directly. The hybrid approach uses RSA only to securely wrap a small AES key. AES-256-GCM then does the actual payload encryption at hardware speed, with an authentication tag that detects any tampering in transit.
+
+```mermaid
+sequenceDiagram
+   participant App as React Native App
+   participant Cache as Encrypted MMKV
+   participant Server as Your Backend
+
+   Note over App,Server: One-time: public key distribution at startup
+   App->>Server: GET /crypto/public-key (App Check + SSL pinned)
+   Server-->>App: RSA-2048 Public Key (PEM)
+   App->>Cache: Cache public key in encrypted MMKV
+
+   Note over App,Server: Per sensitive request: hybrid encryption
+   App->>App: 1. Generate random 256-bit AES session key
+   App->>App: 2. Generate random 16-byte IV
+   App->>App: 3. AES-256-GCM encrypt(payload) → ciphertext + authTag
+   App->>App: 4. RSA-OAEP encrypt(AES key) → encryptedKey
+   App->>Server: POST { encryptedKey, iv, ciphertext, tag }
+   Server->>Server: RSA private-key decrypt(encryptedKey) → AES key
+   Server->>Server: AES-GCM decrypt(ciphertext, iv) → plaintext
+   Server->>Server: Verify GCM auth tag — rejects if tampered
+   Server-->>App: Response
+```
+
+> **Why GCM (Galois/Counter Mode)?** AES-GCM is *authenticated* encryption — it produces a 16-byte `authTag` that covers every byte of ciphertext. If anything is modified in transit (even one bit), the tag check fails on the server and the payload is rejected before decoding. This gives you confidentiality **and** integrity in a single operation.
+
+1. Server exposes a public key (RSA-OAEP or ECDH)
+2. Client generates a random AES-256 session key and encrypts it with the server public key
+3. Client encrypts the payload body using AES-256-GCM (authenticated encryption)
+4. Both the encrypted key and encrypted payload are sent together
+5. Server decrypts the session key with its private key, then decrypts the payload
+
+Use [`react-native-quick-crypto`](https://github.com/margelo/react-native-quick-crypto) — a native crypto module backed by the device's hardware crypto engine, significantly faster than pure-JS alternatives:
+
+```bash
+npm install react-native-quick-crypto
+```
+
+```typescript
+import {
+ randomBytes,
+ createCipheriv,
+ publicEncrypt,
+ constants,
+} from 'react-native-quick-crypto';
+
+async function encryptPayload(payload: object, serverPublicKeyPem: string) {
+ const sessionKey = randomBytes(32); // 256-bit AES key
+ const iv = randomBytes(16);
+
+ const cipher = createCipheriv('aes-256-gcm', sessionKey, iv);
+ const encrypted = Buffer.concat([
+   cipher.update(JSON.stringify(payload), 'utf8'),
+   cipher.final(),
+ ]);
+ const authTag = cipher.getAuthTag(); // GCM authentication tag
+
+ // Wrap the session key with the server's RSA public key
+ const encryptedKey = publicEncrypt(
+   { key: serverPublicKeyPem, padding: constants.RSA_PKCS1_OAEP_PADDING },
+   sessionKey,
+ );
+
+ return {
+   encryptedKey: encryptedKey.toString('base64'),
+   iv: iv.toString('base64'),
+   ciphertext: encrypted.toString('base64'),
+   tag: authTag.toString('base64'),
+ };
+}
+```
+
+Apply it selectively via an Axios interceptor on sensitive endpoints:
+
+```typescript
+apiClient.interceptors.request.use(async (config) => {
+ if ((config as any).encryptPayload && config.data) {
+   config.data = await encryptPayload(config.data, SERVER_PUBLIC_KEY);
+   config.headers['X-Payload-Encrypted'] = '1';
+ }
+ return config;
+});
+```
+
+> **Note**: Payload encryption adds complexity and latency. Apply it selectively to your highest-sensitivity endpoints rather than globally. Measure the round-trip overhead under production load conditions before rolling it out broadly.
+
+**Key distribution**: Never hardcode the server public key in your JS bundle. Fetch it from a secured key distribution endpoint (protected by App Check + SSL pinning) at app startup and cache it in encrypted MMKV storage.
+
+---
+

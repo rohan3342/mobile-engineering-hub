@@ -1493,3 +1493,50 @@ apiClient.interceptors.request.use(async (config) => {
 
 ---
 
+### Firebase App Check vs SSL Pinning
+
+These are often confused or treated as alternatives. They are not — they protect against **completely different attack vectors** and address **opposite sides of the trust problem**. You need both.
+
+| | Firebase App Check | SSL Pinning |
+|---|---|---|
+| **Trust direction** | Server trusts the **client** | Client trusts the **server** |
+| **Core question** | "Did this request come from my legitimate app?" | "Am I connected to my real server?" |
+| **Enforced at** | Backend (server rejects requests without valid tokens) | Client (app rejects the TLS connection) |
+| **Attack stopped** | Bots and scripts calling your API directly, without your app | MITM proxies intercepting traffic between your app and server |
+| **Attacker's position** | Outside your app entirely — hitting your API endpoint directly | Between your app and the server — intercepting an in-app request |
+| **Bypassed by** | Extracting a valid token from a running app session (difficult; tokens are short-lived) | Rooting the device and hooking the SSL stack with Frida |
+| **Does NOT protect against** | Traffic that IS from your app but being intercepted in transit | Requests that aren't from your app at all |
+| **State of a "passing" request** | Request has a cryptographically valid attestation token | Connection terminated TLS handshake with the expected certificate |
+
+The critical insight is the direction of trust:
+
+- **App Check**: your *backend* decides whether to trust the *client*
+- **SSL Pinning**: your *app* decides whether to trust the *server*
+
+A request can satisfy one while failing the other:
+
+- A bot fires requests with a spoofed or missing App Check token → **App Check blocks it, SSL pinning is irrelevant** (the attacker isn't inside your app)
+- A MITM proxy intercepts a legitimate in-app request with a valid App Check token → **SSL pinning blocks it, App Check is irrelevant** (the token is valid — it came from the real app)
+
+```mermaid
+flowchart TD
+   subgraph AC["Firebase App Check — Server trusts the Client"]
+       direction LR
+       BOT[Attacker bot or script] -- "Direct API call\nno App Check token" --> ACBACK[Your Backend]
+       ACBACK -- "401 Unauthorized" --> BOT
+       NATIVE[Real App] -- "API call + valid\nApp Check token" --> ACBACK
+       ACBACK -- "200 OK" --> NATIVE
+   end
+
+   subgraph SP["SSL Pinning — Client trusts the Server"]
+       direction LR
+       APPCLIENT[Your RN App] -- TLS handshake --> PINCHECK{Cert hash\nmatches pin?}
+       PINCHECK -- "Yes — real server" --> REALSERVER[Your Real Server]
+       REALSERVER -- Response --> APPCLIENT
+       PINCHECK -- "No — MITM proxy" --> DROPPED[Connection rejected\nSSLPinningError]
+   end
+```
+
+**Where they overlap**: On a rooted device, both can be defeated by a sufficiently capable attacker — Frida can hook the SSL validation code (bypassing pinning) and can also intercept the App Check token from memory to replay it. This is why JailMonkey + rooted device detection is part of the stack: the first line of defense is refusing to operate on a device where these bypasses are possible.
+
+---

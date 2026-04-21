@@ -1315,3 +1315,77 @@ sequenceDiagram
    App->>App: Throw SSLPinningError, block request
 ```
 
+### Native-Level SSL Pinning (Recommended for High-Security Apps)
+
+JS-level pinning with `react-native-ssl-pinning` is quick to set up but runs in the JavaScript layer — a capable attacker with Frida can hook the JS fetch wrapper and bypass it without touching native code. For higher-assurance implementations, configure pinning at the native HTTP client level, where it cannot be overridden from JavaScript.
+
+**Android — OkHttp `CertificatePinner`**
+
+Override the OkHttp client used by React Native's network layer. In a native module or `MainApplication.kt`:
+
+```kotlin
+import okhttp3.CertificatePinner
+import okhttp3.OkHttpClient
+
+fun buildSecureOkHttpClient(): OkHttpClient {
+   val pinner = CertificatePinner.Builder()
+       // Pin SubjectPublicKeyInfo (SPKI) hash — survives cert renewal if the key pair is retained
+       .add("api.example.com", "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") // active
+       .add("api.example.com", "sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=") // backup
+       .build()
+
+   return OkHttpClient.Builder()
+       .certificatePinner(pinner)
+       .build()
+}
+```
+
+Wire this into React Native's `OkHttpClientProvider` so all JS `fetch()` calls use the pinned client:
+
+```kotlin
+// In MainApplication.kt onCreate()
+OkHttpClientProvider.setOkHttpClientFactory { buildSecureOkHttpClient() }
+```
+
+**iOS — TrustKit**
+
+Add TrustKit via CocoaPods:
+
+```ruby
+pod 'TrustKit'
+```
+
+Configure in `AppDelegate.swift` before any network activity, ideally as the first statement in `application(_:didFinishLaunchingWithOptions:)`:
+
+```swift
+import TrustKit
+
+TrustKit.initSharedInstance(withConfiguration: [
+   kTSKSwizzleNetworkDelegates: false,
+   kTSKPinnedDomains: [
+       "api.example.com": [
+           kTSKIncludeSubdomains: true,
+           kTSKEnforcePinning:    true,
+           kTSKPublicKeyHashes: [
+               "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",  // active SPKI hash
+               "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",  // backup SPKI hash
+           ],
+       ],
+   ],
+])
+```
+
+**Computing the SPKI hash** (SubjectPublicKeyInfo — recommended over leaf cert hash):
+
+```bash
+openssl x509 -in api_cert.pem -pubkey -noout \
+ | openssl pkey -pubin -outform DER \
+ | openssl dgst -sha256 -binary \
+ | openssl base64
+```
+
+> Pin the SubjectPublicKeyInfo (public key hash) rather than the full leaf certificate. Certificates change at renewal; if you retain the same key pair, the SPKI hash remains stable — giving you significantly more operational flexibility than leaf-cert pinning.
+
+Native-level pinning is enforced by the OS network stack and applies to all connections made by the app, including connections from native modules — not just calls routed through the JS `fetch()` API.
+
+---

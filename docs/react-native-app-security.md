@@ -1235,3 +1235,83 @@ flowchart TD
 ```
 
 ---
+
+## 7. Network Security: SSL Pinning and API Payload Encryption
+
+>  **SSL pinning** locks your app to your server's specific certificate fingerprint, blocking MITM proxies even when a custom CA is installed on a rooted device. **Payload encryption** protects the request body end-to-end past the TLS termination point — through load balancers, CDN edges, and internal service hops — using AES-256-GCM with an RSA-wrapped session key.
+
+### SSL Pinning
+
+HTTPS encrypts traffic in transit, but it does not guarantee you are talking to **your** server. Any trusted Certificate Authority (CA) on the device can issue a certificate for your domain — and on rooted/jailbroken devices, users can install custom CAs, allowing intercepting proxies (Burp Suite, Charles Proxy, mitmproxy) to silently decrypt your traffic even over HTTPS.
+
+**SSL pinning** (certificate pinning) fixes this by embedding your server's expected certificate or public key hash directly in the app, and rejecting any connection that does not match — regardless of what the system's CA store says.
+
+> **Why it matters specifically in React Native**: RN apps communicate over a standard HTTP stack. Once a custom CA is trusted on a rooted device, all API traffic is exposed in plaintext to intercepting proxies — even if the user passed JailMonkey checks. Pinning closes this gap.
+
+There are two approaches:
+
+| Approach | Library | Notes |
+|---|---|---|
+| JS-level | `react-native-ssl-pinning` | Fetch wrapper; quick to set up |
+| Native-level | OkHttp (Android), TrustKit (iOS) | Build-time config; harder to bypass |
+
+**JS-level pinning with `react-native-ssl-pinning`:**
+
+```bash
+npm install react-native-ssl-pinning
+```
+
+```typescript
+import { fetch } from 'react-native-ssl-pinning';
+
+const response = await fetch('https://api.example.com/v1/accounts', {
+ method: 'POST',
+ headers: { 'Content-Type': 'application/json' },
+ body: JSON.stringify(payload),
+ sslPinning: {
+   certs: ['api_cert'], // filename (without extension) in assets folder
+ },
+});
+```
+
+Place the `.cer` file in `android/app/src/main/assets/` (Android) and your Xcode project bundle (iOS). The library validates the server's leaf certificate against the embedded copy on every request.
+
+**Certificate rotation is the main operational challenge.** Plan for it before you ship:
+
+- Embed both your active certificate **and** your next certificate (backup pin) so rotations don't break the app
+- Prefer **public key pinning** (hashing the SubjectPublicKeyInfo) over leaf cert pinning — keys change less often than certificates
+- Implement a remote config flag (protected by App Check) to disable pinning during emergency rotations
+- Always disable pinning in `__DEV__` to allow local development with proxy tools
+
+```typescript
+import { fetch } from 'react-native-ssl-pinning';
+
+const secureFetch = __DEV__
+ ? globalThis.fetch  // standard fetch in dev — allows Charles/mitmproxy
+ : (url: string, options: object) =>
+     fetch(url, { ...options, sslPinning: { certs: ['api_cert', 'api_cert_backup'] } });
+```
+
+```mermaid
+sequenceDiagram
+   participant App as React Native App
+   participant Pin as Embedded Pin Store
+   participant Server as Your Server
+   participant MITM as Intercepting Proxy
+
+   Note over App,Server: Legitimate connection
+   App->>Server: TLS ClientHello
+   Server-->>App: Certificate chain
+   App->>Pin: Compare cert / public key hash
+   Pin-->>App: Match — connection allowed
+   App->>Server: Encrypted API request
+   Server-->>App: Response
+
+   Note over App,MITM: MITM attack attempt
+   App->>MITM: TLS ClientHello (intercepted)
+   MITM-->>App: Attacker certificate
+   App->>Pin: Compare cert / public key hash
+   Pin-->>App: Mismatch — reject
+   App->>App: Throw SSLPinningError, block request
+```
+

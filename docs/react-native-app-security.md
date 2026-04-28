@@ -1578,3 +1578,14 @@ flowchart LR
        APK2 -- "apktool / unzip" --> ATTACKER2["Binary bytecode\nNot human-readable"]
    end
 ```
+
+### What Hermes Does NOT Protect Against
+
+Hermes bytecode is **not cryptographically protected**. Dedicated decompilation tools exist:
+
+- **`hermes-dec`** (open source) — decompiles Hermes bytecode back to approximate JavaScript. The output is less clean than the original source but recovers function names, string constants, and API endpoints.
+- **`hbctool`** — reads and patches Hermes bytecode at the instruction level.
+
+A motivated attacker with a few hours can still recover meaningful information from a Hermes-compiled bundle. What Hermes removes is the **zero-effort, zero-skill** attack path — extracting your bundle with `unzip` and opening it in a text editor.
+
+> **The architectural conclusion**: Hermes significantly raises the cost of JS bundle extraction, but the *only fully reliable protection for sensitive values is not putting them in the bundle at all.*

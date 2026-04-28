@@ -1674,3 +1674,31 @@ flowchart LR
 For values that must be fetched dynamically (e.g., the server public key for payload encryption), fetch them from a secured endpoint at startup and cache them in encrypted MMKV, as described in Section 7. Never hardcode them in the bundle.
 
 ---
+
+### API Key and Secret Lifecycle Management
+
+The question of *where* secrets live is distinct from the question of *how* your app code accesses them. Secrets exist across three environments — local development, CI/CD pipelines, and production runtime — and each needs a different management strategy.
+
+```mermaid
+flowchart TD
+   subgraph DEV["Local Development"]
+       ENV[".env file\n(gitignored)"]
+       RNC["react-native-config\nreads .env at build time"]
+   end
+
+   subgraph CI["CI/CD Pipeline (GitHub Actions)"]
+       GHS["GitHub Secrets\nencrypted at rest\ninjected as env vars at build time"]
+       CIENV["CI runner environment\nNever written to disk or logs"]
+   end
+
+   subgraph PROD["Production / Runtime"]
+       BFF2["Backend-for-Frontend\nsecret stays server-side"]
+       VAULT["External Secret Manager\nHashiCorp Vault · AWS Secrets Manager\nDoppler · GCP Secret Manager"]
+   end
+
+   DEV -- "Developer machine only\nnever committed" --> BUILD
+   CI -- "Build-time injection\nnever in source code" --> BUILD
+   BUILD["React Native Release Build\n(.env values inlined as constants)"]
+   BUILD -- "Non-secret config only\n(base URLs, feature flags)" --> APP["Shipped APK / IPA"]
+   PROD -- "Actual secrets fetched\nat runtime by the server" --> APP
+```

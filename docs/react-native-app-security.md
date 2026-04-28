@@ -1631,3 +1631,46 @@ React Native ships a default `proguard-rules.pro` in the template. Ensure it is 
 ```
 
 With `minifyEnabled true`, freeRASP's `obfuscationIssues` callback will no longer fire in release builds — confirming that native-layer obfuscation is active.
+
+### New Architecture (RN 0.76+) — Additional Native Protection
+
+With the New Architecture (default since RN 0.76), much of the performance-critical integration code moves from the JS thread into **C++ JSI (JavaScript Interface) modules** compiled as native libraries (`.so` on Android, `.dylib`/`.a` on iOS). Compiled native code is substantially harder to reverse-engineer than Java bytecode — it requires a disassembler (IDA Pro, Ghidra, Binary Ninja) and architecture-level reverse engineering.
+
+This does not change the JS bundle story, but it does mean that apps on RN 0.76+ with TurboModules have a naturally stronger native-layer posture than the old bridge-based architecture.
+
+### The Only Reliable Defense for Secrets: Keep Them Out of the Bundle
+
+No level of obfuscation is a substitute for architectural hygiene. A Hermes-compiled bundle with ProGuard-obfuscated native code can still be decompiled by a sufficiently motivated attacker. The correct approach is:
+
+**1. Build-time environment variable injection**
+
+Use `react-native-config` or `babel-plugin-transform-inline-environment-variables` to inject non-secret build-time constants (API base URLs, feature toggle names, environment identifiers). These become inlined string literals in the bundle — they are visible to a decompiler, so never inject secrets this way.
+
+```ts
+import Config from 'react-native-config';
+
+// ✅ Safe: non-secret base URL injected at build time
+const API_BASE = Config.API_BASE_URL;
+
+// ❌ Never inject actual secrets (API keys, signing keys, passwords)
+// const API_SECRET = Config.STRIPE_SECRET_KEY; // visible in bundle
+```
+
+**2. Backend-for-Frontend (BFF) pattern for secrets**
+
+Any value that must remain secret belongs on the server. Your app calls a BFF endpoint that holds the secret and makes the downstream call on behalf of the app:
+
+```mermaid
+flowchart LR
+   APP["React Native App"] -- "POST /payments/initiate\n(App Check token + idempotency key)" --> BFF["Your BFF / API Gateway"]
+   BFF -- "POST /charges\nAuthorization: Bearer STRIPE_SECRET_KEY" --> STRIPE["Stripe API"]
+   STRIPE -- "Payment intent" --> BFF
+   BFF -- "client_secret (one-time use)" --> APP
+   NOTE["Stripe secret key\nnever leaves your server"] -. .-> BFF
+```
+
+**3. Runtime key fetching (for public keys, config)**
+
+For values that must be fetched dynamically (e.g., the server public key for payload encryption), fetch them from a secured endpoint at startup and cache them in encrypted MMKV, as described in Section 7. Never hardcode them in the bundle.
+
+---

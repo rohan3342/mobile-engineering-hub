@@ -1540,3 +1540,41 @@ flowchart TD
 **Where they overlap**: On a rooted device, both can be defeated by a sufficiently capable attacker — Frida can hook the SSL validation code (bypassing pinning) and can also intercept the App Check token from memory to replay it. This is why JailMonkey + rooted device detection is part of the stack: the first line of defense is refusing to operate on a device where these bypasses are possible.
 
 ---
+
+## 8. Code Obfuscation and Secret Management
+
+> **Short answer**: With Hermes enabled (the default since React Native 0.64 on Android and 0.70 on iOS), your JavaScript bundle is compiled to **binary bytecode** at build time — it is not human-readable source code. This gives you meaningful partial protection out of the box. It does not eliminate the need for ProGuard/R8 on the native layer, and it is not a substitute for keeping secrets out of the bundle entirely.
+
+### Why This Question Comes Up
+
+In older React Native versions, the JS bundle shipped as a plain-text `.bundle` file inside the APK or IPA. Anyone who extracted the archive with `apktool` or `unzip` could read your entire application logic — API endpoints, business rules, and (if carelessly included) secrets — as readable JavaScript. This created a genuine and exploited attack surface.
+
+The introduction of **Hermes** as the default JS engine changed this significantly. Hermes pre-compiles JavaScript to its own bytecode format (`.hbc`) at bundle time. What ends up inside the APK/IPA is a binary blob, not JavaScript source.
+
+### What Hermes Gives You
+
+Hermes bytecode is:
+
+- **Binary** — not readable as JavaScript text
+- **Compact** — optimized for parse speed, not for human readability
+- **Stripped of source maps** in release builds — source maps are omitted unless you explicitly include them
+
+This means the most common low-effort attack — decompile the APK, open the bundle in a text editor, read your API URLs and logic — no longer works against a Hermes-compiled release build.
+
+```mermaid
+flowchart LR
+   subgraph OLD["React Native < 0.64 (no Hermes)"]
+       direction LR
+       SRC1["index.js + all JS"] --> METRO1["Metro bundler"] --> BUNDLE1["main.jsbundle\n(plain-text JavaScript)"]
+       BUNDLE1 --> APK1["APK / IPA"]
+       APK1 -- "apktool / unzip" --> ATTACKER1["Readable JS\nAPI keys · endpoints · logic"]
+   end
+
+   subgraph NEW["React Native 0.76+ (Hermes default, New Architecture)"]
+       direction LR
+       SRC2["index.js + all JS"] --> METRO2["Metro bundler"] --> HBC["Hermes compiler (hermesc)"]
+       HBC --> BYTECODE["index.android.bundle\n(binary .hbc bytecode)"]
+       BYTECODE --> APK2["APK / IPA"]
+       APK2 -- "apktool / unzip" --> ATTACKER2["Binary bytecode\nNot human-readable"]
+   end
+```

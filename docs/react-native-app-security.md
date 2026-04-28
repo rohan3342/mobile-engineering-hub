@@ -1589,3 +1589,45 @@ Hermes bytecode is **not cryptographically protected**. Dedicated decompilation 
 A motivated attacker with a few hours can still recover meaningful information from a Hermes-compiled bundle. What Hermes removes is the **zero-effort, zero-skill** attack path — extracting your bundle with `unzip` and opening it in a text editor.
 
 > **The architectural conclusion**: Hermes significantly raises the cost of JS bundle extraction, but the *only fully reliable protection for sensitive values is not putting them in the bundle at all.*
+
+### The Two Obfuscation Layers Explained
+
+React Native apps have two distinct code layers that require separate obfuscation strategies:
+
+| Layer | What It Contains | Obfuscation Mechanism | Status in Modern RN |
+|---|---|---|---|
+| **JS bundle** | Application logic, UI, API calls | Hermes bytecode compilation | **Automatic** — enabled by default since RN 0.64 (Android) / 0.70 (iOS) |
+| **Native layer** (Java / Kotlin / ObjC / Swift) | Native modules, bridges, platform bindings | ProGuard / R8 (Android); Swift compiler optimizations (iOS) | **Android: must be explicitly enabled.** iOS: compiler strips symbols in release builds. |
+
+freeRASP's `obfuscationIssues` callback (Section 3) fires specifically when it detects that your Android release APK was compiled **without ProGuard/R8**. This is the check that enforces native-layer obfuscation — not JS bundle obfuscation.
+
+### Enabling ProGuard / R8 on Android (Required)
+
+ProGuard (replaced by R8 in modern Gradle) obfuscates and shrinks the Java/Kotlin native layer of your app. It must be explicitly enabled in your release build configuration:
+
+```groovy
+// android/app/build.gradle
+android {
+   buildTypes {
+       release {
+           minifyEnabled true          // enables R8 (successor to ProGuard)
+           shrinkResources true         // removes unused resources
+           proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
+                        'proguard-rules.pro'
+       }
+   }
+}
+```
+
+React Native ships a default `proguard-rules.pro` in the template. Ensure it is not empty and that your custom native modules have matching keep rules to avoid stripping classes that are called via reflection:
+
+```pro
+# proguard-rules.pro — React Native baseline
+-keep class com.facebook.hermes.unicode.** { *; }
+-keep class com.facebook.jni.** { *; }
+
+# Keep your app's native modules
+-keep class com.yourapp.modules.** { *; }
+```
+
+With `minifyEnabled true`, freeRASP's `obfuscationIssues` callback will no longer fire in release builds — confirming that native-layer obfuscation is active.

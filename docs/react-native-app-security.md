@@ -1702,3 +1702,53 @@ flowchart TD
    BUILD -- "Non-secret config only\n(base URLs, feature flags)" --> APP["Shipped APK / IPA"]
    PROD -- "Actual secrets fetched\nat runtime by the server" --> APP
 ```
+
+#### Local Development — `.env` Files with `react-native-config`
+
+[`react-native-config`](https://github.com/luggit/react-native-config) bridges `.env` files into your React Native app at build time, making values available via `Config.*` in JS and through native build configs in Gradle and Xcode.
+
+**Setup:**
+
+```bash
+npm install react-native-config
+cd ios && pod install
+```
+
+Create per-environment `.env` files at the project root:
+
+```
+.env                  # default / local development
+.env.staging          # staging build
+.env.production       # production build
+```
+
+Example `.env`:
+```bash
+# .env — NEVER commit this file, never put real secrets here
+API_BASE_URL=https://api.dev.example.com
+SARDINE_ENVIRONMENT=sandbox
+SARDINE_CLIENT_ID=sardine_dev_client_id
+
+# These are non-secret identifiers, safe to inject at build time
+FIREBASE_DEBUG_TOKEN_ANDROID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+Add all `.env*` variants to `.gitignore`:
+
+```gitignore
+# .gitignore
+.env
+.env.*
+!.env.example      # commit only a documented example with no real values
+```
+
+Always commit a `.env.example` documenting every required variable with placeholder values. This serves as the contract for what must be populated in CI and by new developers:
+
+```bash
+# .env.example — commit this, fill in values locally and in CI
+API_BASE_URL=
+SARDINE_ENVIRONMENT=
+SARDINE_CLIENT_ID=
+FIREBASE_DEBUG_TOKEN_ANDROID=
+FIREBASE_DEBUG_TOKEN_IOS=
+```

@@ -1817,3 +1817,18 @@ jobs:
 
 > **Key principle**: GitHub Secrets are write-only from the perspective of workflow runs — you cannot `echo` them to logs (GitHub will mask them) and they cannot be read back via the API. They are injected to the runner environment exactly once per job, and the runner is discarded afterward.
 
+#### Alternatives to GitHub Secrets
+
+GitHub Secrets covers the CI/CD injection use case well. For more advanced enterprise requirements, the following tools extend the model:
+
+| Tool | Best For | Key Advantage |
+|---|---|---|
+| **GitHub Secrets** | Most teams using GitHub Actions | Built-in, zero cost, tightly integrated with GitHub environments |
+| **[Doppler](https://www.doppler.com)** | Teams managing many secrets across many apps/services | Central dashboard, sync to GitHub/Vercel/AWS, automatic secret rotation, audit log |
+| **[HashiCorp Vault](https://www.vaultproject.io)** | Enterprise / regulated environments | Dynamic secrets, fine-grained ACL, on-premises or cloud, PKI and SSH cert issuance |
+| **[AWS Secrets Manager](https://aws.amazon.com/secrets-manager/)** | Teams on AWS | Native IAM integration, automatic rotation, KMS encryption, free for 30 days then $0.40/secret/month |
+| **[GCP Secret Manager](https://cloud.google.com/secret-manager)** | Teams on GCP | IAM-native, low cost ($0.06/10k access ops), regional replication |
+| **[Azure Key Vault](https://azure.microsoft.com/en-us/products/key-vault/)** | Teams on Azure | Native RBAC, HSM-backed, integrates with Azure DevOps |
+| **[1Password Secrets Automation](https://developer.1password.com/docs/ci-cd/)** | Teams already using 1Password | Zero-knowledge architecture, rotate without code changes |
+
+**AWS Secrets Manager** is worth highlighting for teams already on AWS infrastructure — secrets are stored centrally, access is controlled via IAM roles, and values are never written to disk or source control. Your CI runner fetches them at build time using the AWS CLI, and your backend fetches them at runtime using the SDK.

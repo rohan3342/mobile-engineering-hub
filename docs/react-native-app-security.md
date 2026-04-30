@@ -1752,3 +1752,68 @@ SARDINE_CLIENT_ID=
 FIREBASE_DEBUG_TOKEN_ANDROID=
 FIREBASE_DEBUG_TOKEN_IOS=
 ```
+
+#### CI/CD — GitHub Secrets
+
+GitHub Secrets are the correct mechanism for injecting secrets into GitHub Actions builds. They are:
+
+- Encrypted at rest and in transit by GitHub
+- Never printed in workflow logs (masked automatically)
+- Not accessible to forked repositories in pull request workflows
+- Scoped to repository, environment, or organization level
+
+**Adding secrets to a repository:**
+
+Go to **Repository → Settings → Secrets and variables → Actions → New repository secret**.
+
+For multi-environment setups (staging, production), use [GitHub Environments](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment) to scope secrets per deployment target — this enforces that production secrets are only accessible during production deploys, and staging secrets are only accessible during staging deploys.
+
+**Injecting secrets into a React Native build workflow:**
+
+```yaml
+# .github/workflows/build-android.yml
+name: Android Release Build
+
+on:
+ push:
+   branches: [main]
+
+jobs:
+ build:
+   runs-on: ubuntu-latest
+   environment: production   # uses the "production" GitHub Environment secrets
+
+   steps:
+     - uses: actions/checkout@v4
+
+     - name: Write .env from GitHub Secrets
+       run: |
+         echo "API_BASE_URL=${{ secrets.API_BASE_URL }}" >> .env
+         echo "SARDINE_CLIENT_ID=${{ secrets.SARDINE_CLIENT_ID }}" >> .env
+         echo "SARDINE_ENVIRONMENT=production" >> .env
+         echo "FIREBASE_DEBUG_TOKEN_ANDROID=${{ secrets.FIREBASE_DEBUG_TOKEN_ANDROID }}" >> .env
+
+     - name: Build Android release
+       run: cd android && ./gradlew assembleRelease
+
+     # The .env file is never committed — it exists only for the duration
+     # of this runner's job and is deleted when the runner shuts down
+```
+
+**iOS (Xcode / Fastlane):**
+
+```yaml
+     - name: Write iOS .env from GitHub Secrets
+       run: |
+         echo "API_BASE_URL=${{ secrets.API_BASE_URL }}" >> .env
+         echo "FIREBASE_DEBUG_TOKEN_IOS=${{ secrets.FIREBASE_DEBUG_TOKEN_IOS }}" >> .env
+
+     - name: Build iOS release
+       run: bundle exec fastlane ios build
+       env:
+         MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+         APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+```
+
+> **Key principle**: GitHub Secrets are write-only from the perspective of workflow runs — you cannot `echo` them to logs (GitHub will mask them) and they cannot be read back via the API. They are injected to the runner environment exactly once per job, and the runner is discarded afterward.
+

@@ -1905,3 +1905,19 @@ const stripeClient = new Stripe(secrets.STRIPE_SECRET_KEY);
 ```
 
 The React Native app never sees `STRIPE_SECRET_KEY` — only the backend fetches it at runtime from Secrets Manager using its IAM instance role.
+
+#### What Should and Should Not Be a Secret
+
+A common mistake is over-classifying values as secrets, adding unnecessary workflow complexity, or — more dangerously — under-classifying and leaking actual secrets into source control or bundle files.
+
+| Value Type | Examples | Should Be a Secret? | Correct Location |
+|---|---|---|---|
+| API base URL | `https://api.example.com` | No | `.env` → `react-native-config` → bundle |
+| Firebase App ID | `1:123456789:android:abc` | No | `google-services.json` (committed) |
+| Firebase debug token | `xxxxxxxx-xxxx-xxxx-xxxx` | Yes (dev/CI only) | GitHub Secret → `.env` |
+| Signing keystore password | — | **Yes** | GitHub Secret → used by Gradle, never bundled |
+| Stripe publishable key | `pk_live_...` | No (public by design) | `.env` → bundle |
+| Stripe secret key | `sk_live_...` | **Yes** | Server-side only — never in app |
+| Sardine client ID | — | Yes | GitHub Secret → `.env` |
+| Internal API key | — | **Yes** | Server-side BFF only — never in app |
+| App Store Connect API key | — | **Yes** | GitHub Secret → Fastlane only |

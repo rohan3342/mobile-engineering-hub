@@ -1885,3 +1885,23 @@ jobs:
 
 > **Note on OIDC**: The `aws-actions/configure-aws-credentials` action with `role-to-assume` uses OpenID Connect to obtain short-lived AWS credentials — no long-lived `AWS_ACCESS_KEY_ID` secret needs to be stored in GitHub. This is the recommended pattern for GitHub Actions → AWS.
 
+**Fetching secrets at runtime on your backend (Node.js):**
+
+```ts
+import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
+
+const client = new SecretsManagerClient({ region: 'us-east-1' });
+
+export const getSecrets = async (): Promise<Record<string, string>> => {
+ const response = await client.send(
+   new GetSecretValueCommand({ SecretId: 'myapp/production' }),
+ );
+ return JSON.parse(response.SecretString!);
+};
+
+// Call once at server startup, then reuse the cached values
+const secrets = await getSecrets();
+const stripeClient = new Stripe(secrets.STRIPE_SECRET_KEY);
+```
+
+The React Native app never sees `STRIPE_SECRET_KEY` — only the backend fetches it at runtime from Secrets Manager using its IAM instance role.

@@ -1832,3 +1832,21 @@ GitHub Secrets covers the CI/CD injection use case well. For more advanced enter
 | **[1Password Secrets Automation](https://developer.1password.com/docs/ci-cd/)** | Teams already using 1Password | Zero-knowledge architecture, rotate without code changes |
 
 **AWS Secrets Manager** is worth highlighting for teams already on AWS infrastructure — secrets are stored centrally, access is controlled via IAM roles, and values are never written to disk or source control. Your CI runner fetches them at build time using the AWS CLI, and your backend fetches them at runtime using the SDK.
+
+**Storing a secret:**
+
+```bash
+# Store each secret as a key/value pair in a single versioned secret
+aws secretsmanager create-secret \
+ --name "myapp/production" \
+ --secret-string '{
+   "API_BASE_URL": "https://api.example.com",
+   "SARDINE_CLIENT_ID": "sardine_prod_id",
+   "STRIPE_SECRET_KEY": "sk_live_..."
+ }'
+
+# Update a single field without touching others
+aws secretsmanager put-secret-value \
+ --secret-id "myapp/production" \
+ --secret-string '{"SARDINE_CLIENT_ID": "sardine_prod_id_v2"}'
+```

@@ -1850,3 +1850,38 @@ aws secretsmanager put-secret-value \
  --secret-id "myapp/production" \
  --secret-string '{"SARDINE_CLIENT_ID": "sardine_prod_id_v2"}'
 ```
+
+**Fetching secrets in a GitHub Actions build and writing them to `.env`:**
+
+```yaml
+# .github/workflows/build-android.yml
+jobs:
+ build:
+   runs-on: ubuntu-latest
+   permissions:
+     id-token: write   # required for OIDC → AWS role assumption (no long-lived AWS keys)
+     contents: read
+
+   steps:
+     - uses: actions/checkout@v4
+
+     - name: Configure AWS credentials (OIDC — no stored AWS keys)
+       uses: aws-actions/configure-aws-credentials@v4
+       with:
+         role-to-assume: arn:aws:iam::123456789012:role/github-actions-rn-build
+         aws-region: us-east-1
+
+     - name: Fetch secrets from AWS Secrets Manager → .env
+       run: |
+         aws secretsmanager get-secret-value \
+           --secret-id "myapp/production" \
+           --query SecretString \
+           --output text \
+         | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> .env
+
+     - name: Build Android release
+       run: cd android && ./gradlew assembleRelease
+```
+
+> **Note on OIDC**: The `aws-actions/configure-aws-credentials` action with `role-to-assume` uses OpenID Connect to obtain short-lived AWS credentials — no long-lived `AWS_ACCESS_KEY_ID` secret needs to be stored in GitHub. This is the recommended pattern for GitHub Actions → AWS.
+

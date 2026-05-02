@@ -1921,3 +1921,13 @@ A common mistake is over-classifying values as secrets, adding unnecessary workf
 | Sardine client ID | — | Yes | GitHub Secret → `.env` |
 | Internal API key | — | **Yes** | Server-side BFF only — never in app |
 | App Store Connect API key | — | **Yes** | GitHub Secret → Fastlane only |
+
+> **The decisive test**: If this value were to appear in your app's binary, could an attacker extract it and make calls to a paid API, access user data, or impersonate your server? If yes — it is a secret, it belongs on the server, and it should never be injected into the client bundle regardless of obfuscation.
+
+```mermaid
+flowchart TD
+   Q1{If extracted from the\nbundle by an attacker...}
+   Q1 -- "Could call a paid API\nor access user data" --> SECRET["It is a SECRET\n→ Server-side only (BFF)\n→ Never inject into bundle"]
+   Q1 -- "Could identify your app\nbut not cause harm alone" --> IDENTIFIER["It is an IDENTIFIER\n→ Safe to inject via react-native-config\n→ Still keep out of source code"]
+   Q1 -- "Is public by design\n(e.g. Stripe publishable key)" --> PUBLIC["Public value\n→ Can be in bundle\n→ Still use .env for env separation"]
+```

@@ -1931,3 +1931,31 @@ flowchart TD
    Q1 -- "Could identify your app\nbut not cause harm alone" --> IDENTIFIER["It is an IDENTIFIER\n→ Safe to inject via react-native-config\n→ Still keep out of source code"]
    Q1 -- "Is public by design\n(e.g. Stripe publishable key)" --> PUBLIC["Public value\n→ Can be in bundle\n→ Still use .env for env separation"]
 ```
+
+### Optional: JavaScript Obfuscation with `javascript-obfuscator`
+
+If Hermes bytecode is insufficient for your threat model (e.g., you are building a DRM client, a white-label SDK, or working under specific compliance requirements), you can add a dedicated JavaScript obfuscation step via Metro's transformer API:
+
+```bash
+npm install --save-dev javascript-obfuscator metro-react-native-babel-obfuscator
+```
+
+```js
+// metro.config.js (apply only to release builds)
+const { getDefaultConfig } = require('@react-native/metro-config');
+
+const config = getDefaultConfig(__dirname);
+
+if (process.env.NODE_ENV === 'production') {
+ config.transformer.minifierPath = require.resolve('metro-react-native-babel-obfuscator');
+ config.transformer.minifierConfig = {
+   compact:             true,
+   stringArray:         true,
+   rotateStringArray:   true,
+   stringArrayEncoding: ['rc4'],
+   identifierNamesGenerator: 'hexadecimal',
+ };
+}
+
+module.exports = config;
+```

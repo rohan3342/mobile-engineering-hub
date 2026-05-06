@@ -1959,3 +1959,24 @@ if (process.env.NODE_ENV === 'production') {
 
 module.exports = config;
 ```
+
+**When JS obfuscation is worth the cost**:
+
+| Scenario | Justification |
+|---|---||
+| DRM / content protection logic in JS | Delays reverse-engineering of license validation |
+| Proprietary algorithm embedded in bundle | Raises cost of IP theft |
+| White-label SDK distributed to third parties | You don't control what tools they run |
+| PCI DSS in-scope payment logic in JS layer | Compliance may mandate additional controls |
+
+**When it is not worth the cost**:
+
+| Scenario | Reason |
+|---|---|
+| Standard consumer app with Hermes enabled | Bytecode compilation already handles casual attackers |
+| App where secrets are properly kept server-side | Nothing worth protecting in the bundle |
+| Performance-sensitive apps | JS obfuscation adds build time and can inflate bundle size |
+
+> **Rule of thumb**: If your threat model requires that a motivated, well-funded attacker cannot reverse-engineer your app, no client-side obfuscation will stop them. Obfuscation raises cost and buys time — it does not provide confidentiality guarantees. Architect your system so that compromising the client does not compromise your users or your infrastructure.
+
+---

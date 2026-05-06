@@ -1980,3 +1980,110 @@ module.exports = config;
 > **Rule of thumb**: If your threat model requires that a motivated, well-funded attacker cannot reverse-engineer your app, no client-side obfuscation will stop them. Obfuscation raises cost and buys time — it does not provide confidentiality guarantees. Architect your system so that compromising the client does not compromise your users or your infrastructure.
 
 ---
+
+## 9. Security Testing and Validation
+
+> Deploying security controls without testing them is equivalent to installing a deadbolt without checking that the lock actually engages. This section covers how to validate that each layer of your security stack behaves correctly before and after shipping.
+
+### Testing JailMonkey and freeRASP
+
+**Simulator / emulator baseline**: Both libraries detect standard Android emulators and iOS simulators. Set `isProd: false` (freeRASP) or guard with `__DEV__` (JailMonkey) during development. To validate the *detection path*, you must use a production or release-candidate build on a physical device.
+
+**Rooted / jailbroken test device**: Maintain at least one dedicated rooted Android device and one jailbroken iOS device in your QA lab. Install a production build and verify:
+
+- JailMonkey returns `true` for `isJailBroken()` and `trustFall()`
+- freeRASP fires the `privilegedAccess` callback
+- The app blocks or restricts sensitive features as configured
+- The backend receives the `device_integrity=false` signal in your risk log
+
+**Hook detection testing**: Use [Frida](https://frida.re) from a terminal session on the rooted device:
+
+```bash
+frida -U -l test-hook.js -f com.yourapp
+```
+
+Confirm that freeRASP's `hooks` callback fires and — if `killOnBypass: true` — the process terminates.
+
+**App integrity testing**: Repackage your release APK with `apktool`, resign with a different key, and sideload it. Confirm that freeRASP's `appIntegrity` callback fires because the signing certificate hash no longer matches your configured hash.
+
+### Testing Firebase App Check
+
+**Debug token flow**: Use the `debug` provider with a registered debug token during local development and CI. Verify:
+
+- Authenticated requests with a valid debug token succeed
+- Requests without the `X-Firebase-AppCheck` header return 401
+- Requests with a malformed or expired token return 401
+
+**Play Integrity cold-start test (Android)**: Install a fresh build and make an authenticated request immediately on first launch. Confirm the retry logic in your interceptor handles transient Play Integrity failures gracefully without blocking the user.
+
+### Testing SSL Pinning
+
+**MITM proxy test**: Configure Charles Proxy or mitmproxy on the same network as your test device. Install the proxy's CA certificate on the device. Make an API request and verify:
+
+1. **Without pinning active**: request succeeds through the proxy — confirms your traffic was interceptable
+2. **With pinning active**: request throws an `SSLPinningError` — confirms the pin is enforced
+
+**Certificate rotation test**: Temporarily embed only the backup pin (simulating a primary cert rotation). Confirm that API calls continue to succeed with the backup pin in place before the active pin is updated.
+
+### Testing Sardine Integration
+
+**Signal verification (sandbox)**: After completing a fully instrumented flow, query the Sardine sandbox API with your session key:
+
+```bash
+curl -X GET "https://api.sardine.ai/v1/devices/session?session_key=<SESSION_KEY>" \
+ -H "Authorization: Bearer <SARDINE_API_KEY>"
+```
+
+Verify that `trackPage`, `trackTextChange`, and `trackFocusChange` events appear in the response payload.
+
+**Risk level simulation**: Sardine's sandbox environment supports simulated risk scores via test account configurations. Use these to confirm your backend correctly routes all four risk levels (`low`, `medium`, `high`, `very_high`) to their expected business actions.
+
+### Automated Security Regression Tests
+
+Add behavioral assertions to your test suite to catch regressions when libraries are updated:
+
+```ts
+// __tests__/security/deviceIntegrity.test.ts
+import JailMonkey from 'jail-monkey';
+
+describe('useDeviceSecurity hook', () => {
+ it('returns secure in Jest environment (all checks mocked to false)', () => {
+   expect(JailMonkey.isJailBroken()).toBe(false);
+   expect(JailMonkey.trustFall()).toBe(false);
+   expect(JailMonkey.hookDetected()).toBe(false);
+ });
+
+ it('returns isDeviceSecure=false when any JailMonkey check is truthy', async () => {
+   jest.spyOn(JailMonkey, 'isJailBroken').mockReturnValue(true);
+   // Render the hook and assert navigation to ApplicationUnavailable
+   // ... render hook with renderHook(), assert result.current === false
+ });
+});
+```
+
+```mermaid
+flowchart LR
+   subgraph CI["CI Pipeline — Automated Gates"]
+       UNIT["Unit tests\nMocked security hooks"]
+       LINT["ESLint rules\nno AsyncStorage · no hardcoded secrets"]
+       BUILD["Release build\nProGuard · Hermes enabled"]
+       SCAN["Static analysis\nMobSF or Semgrep mobile rules"]
+   end
+
+   subgraph QA["QA Lab — Manual Device Validation"]
+       ROOTED["Rooted device\nJailMonkey + freeRASP trigger test"]
+       MITM["MITM proxy\nSSL pinning enforcement test"]
+       FRIDA["Frida hook test\nfreeRASP hooks callback"]
+       REPACK["Repackaged APK\nfreeRASP appIntegrity callback"]
+   end
+
+   subgraph PROD["Production Monitoring"]
+       METRICS["App Check token\nvalidation rate"]
+       RASP["freeRASP callback\ntelemetry trends"]
+       SARDINE["Sardine risk\ndistribution dashboard"]
+   end
+
+   CI --> QA --> PROD
+```
+
+---

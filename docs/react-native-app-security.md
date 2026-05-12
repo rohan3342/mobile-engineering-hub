@@ -2087,3 +2087,61 @@ flowchart LR
 ```
 
 ---
+
+## 10. Bringing It All Together
+
+### The Layered Security Model
+
+Each tool operates at a different layer of your security stack:
+
+```mermaid
+flowchart TD
+   START([User opens app])
+
+   START --> LAYER1
+
+   subgraph LAYER1["Layer 1 — Data at Rest & Authentication"]
+       direction LR
+       L1A[MMKV encrypted storage]
+       L1B[Keychain — hardware-backed credentials]
+       L1C[Biometrics — physical presence gate]
+   end
+
+   LAYER1 -->|User authenticated| LAYER2
+
+   subgraph LAYER2["Layer 2 — Device Integrity & Runtime Protection"]
+       direction LR
+       L2A[JailMonkey — rooted / jailbroken / hooked?]
+       L2B["freeRASP — app integrity + full RASP\n★ 100k free download cap on free tier"]
+   end
+
+   LAYER2 -->|Device trusted| LAYER3
+   LAYER2 -->|Compromised| BLOCKED
+
+   subgraph LAYER3["Layer 3 — Network Transport"]
+       direction LR
+       L3A[SSL Pinning — verified server connection]
+       L3B[Payload Encryption — end-to-end for sensitive data]
+   end
+
+   LAYER3 -->|Channel secured| LAYER4
+
+   subgraph LAYER4["Layer 4 — Request Attestation"]
+       L4[Firebase App Check — Play Integrity / App Attest]
+   end
+
+   LAYER4 -->|Token verified by backend| LAYER5
+   LAYER4 -->|Invalid token| BLOCKED
+
+   subgraph LAYER5["Layer 5 — Behavioral Risk  fintech "]
+       L5[Sardine SDK — device fingerprint + behavioral biometrics]
+   end
+
+   LAYER5 -->|Low or Medium risk| SUCCESS
+   LAYER5 -->|High risk| BLOCKED
+
+   SUCCESS([Request Processed])
+   BLOCKED([Blocked or Restricted])
+```
+
+Each layer independently reduces a category of attack. Bypassing all six simultaneously requires decrypting hardware-backed storage, passing device integrity checks, bypassing app integrity verification and continuous RASP monitoring, bypassing certificate pinning, forging a valid attestation token, AND producing convincing behavioral biometrics — a dramatically higher bar for any attacker.

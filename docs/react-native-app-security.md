@@ -2238,3 +2238,51 @@ Use this checklist as a pre-launch gate before shipping to production:
 - [ ] Debug mode confirmed disabled in production builds (`__DEV__ === false`)
 - [ ] CI/CD pipeline enforces production-only debug tokens never reach app store builds
 
+## 11. Conclusion
+
+Mobile security in React Native is not a single checkbox — it is a continuously maintained set of layers that address different threat vectors at different points in the stack.
+
+**JailMonkey** gives you visibility into device integrity before your app does anything sensitive. **freeRASP** takes that further as a full RASP layer — adding app integrity verification (detecting repackaged or tampered builds), kill-on-bypass enforcement, screen capture blocking, and a broader set of runtime threat detections; the free tier is **capped at 100,000 app downloads** and production fintech deployments will need the paid **RASP+** plan. **Firebase App Check** ensures your backend APIs only respond to legitimate app traffic, eliminating an entire class of automated abuse and bot attacks. **SSL pinning and payload encryption** harden the network transport layer against interception — even on devices that slip through integrity checks. **Sardine SDK** adds behavioral and transactional intelligence that detects fraud at the human level. And **MMKV, Keychain, and Biometrics** ensure that even if the device is compromised, stored credentials and sensitive data remain protected.
+
+Together, they answer six fundamental security questions:
+
+1. **Can I trust what's stored on this device?** — MMKV (encrypted) + Keychain + Biometrics
+2. **Can I trust this device?** — JailMonkey
+3. **Is the app unmodified and running in a clean runtime?** — freeRASP *(app integrity verification, kill-on-bypass, screen capture blocking — see Section 3 for free-tier limits)*
+4. **Can I trust this network channel?** — SSL Pinning + Payload Encryption
+5. **Can I trust this request came from my app?** — Firebase App Check
+6. **Can I trust this user's behavior is legitimate?** — Sardine SDK *(fintech)*
+
+The cost of not implementing these safeguards is not hypothetical. Fraudsters actively target mobile apps precisely because many teams treat security as an afterthought. Meanwhile, the tooling to implement meaningful, layered defenses has never been more accessible.
+
+Start by adding JailMonkey as a risk signal in your app startup flow. **Consider adopting freeRASP as a more comprehensive RASP upgrade** — it covers everything JailMonkey provides and adds app integrity verification, kill-on-bypass enforcement, and screen capture blocking; plan for RASP+ costs once your app exceeds 100,000 downloads. Then enforce App Check on your most sensitive endpoints. Then add SSL pinning to close the MITM gap on compromised devices. Then integrate Sardine for your onboarding and payment flows. You do not need to ship everything at once — but the time to start is before your first incident, not after.
+
+```mermaid
+flowchart LR
+   P1["Phase 1\nDevice & Storage\n---\nJailMonkey\nEncrypted MMKV\nKeychain + Biometrics"]
+   P1B["Phase 1b\nRuntime Protection\n---\nfreeRASP\nfree tier: 100k cap\nRASP+ for production scale"]
+   P2["Phase 2\nBackend Protection\n---\nFirebase App Check\nenforced on backend"]
+   P3["Phase 3\nNetwork Layer\n---\nSSL Pinning\nPayload Encryption\non sensitive endpoints"]
+   P4["Phase 4\nBehavioral Risk\n---\nSardine SDK\nfintech only"]
+
+   P1 --> P1B --> P2 --> P3 --> P4
+
+   subgraph RISK["Threats eliminated at each phase"]
+       R1["Rooted device attacks\nCredential extraction\nUnattended access"]
+       R1B["Tampered APK/IPA\nHook bypass\nScreen capture exfiltration"]
+       R2["Bot traffic\nAPI abuse\nDirect script attacks"]
+       R3["MITM interception\nTLS tampering\nIn-transit exposure"]
+       R4["Account fraud\nBehavioral spoofing\nSynthetic identity"]
+   end
+
+   P1 -. eliminates .-> R1
+   P1B -. eliminates .-> R1B
+   P2 -. eliminates .-> R2
+   P3 -. eliminates .-> R3
+   P4 -. eliminates .-> R4
+```
+
+---
+
+*The libraries and patterns discussed in this article are actively maintained. Always pin to specific versions in production and subscribe to their security advisories. The code examples above are illustrative and should be adapted to your app's architecture and threat model.*
+

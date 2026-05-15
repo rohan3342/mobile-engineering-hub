@@ -2163,3 +2163,14 @@ Each layer independently reduces a category of attack. Bypassing all six simulta
 **Don't export secrets in your JS bundle**: API keys, client secrets, and backend URLs in your JS bundle are extractable. Use environment injection at build time and backend-for-frontend (BFF) patterns to keep secrets server-side.
 
 **Certificate pinning and payload encryption**: See [Section 7](#7-network-security-ssl-pinning-and-api-payload-encryption) for full implementation guidance. SSL pinning is especially important on rooted/jailbroken devices that may have custom CAs installed — JailMonkey detects the rooted state, but pinning is what prevents traffic interception even on devices that slip through.
+
+### What to Monitor Continuously
+
+Security is not a one-time setup. After deploying these tools, maintain ongoing visibility:
+
+- **App Check enforcement metrics**: Firebase Console shows token verification rate. A sudden drop indicates client versions missing initialization, or an attack attempting tokenless requests.
+- **JailMonkey / freeRASP signal rates**: Aggregate what percentage of your active users are triggering device integrity or app integrity callbacks. A spike in `privilegedAccess` or `appIntegrity` callbacks may indicate a coordinated fraud campaign or a repackaged APK circulating outside the Play Store.
+- **freeRASP download count (free tier)**: Monitor your app download count against the 100,000 FUP cap. Set a threshold alert well before the limit — upgrading to RASP+ after the cap is exceeded is reactive; plan the upgrade proactively.
+- **Sardine risk distribution**: Track how many `high` and `very_high` risk sessions you're seeing. A surge in high-risk onboarding events is an early indicator of a fraud campaign.
+- **Library updates**: JailMonkey and freeRASP need to be kept current. Jailbreak tools evolve rapidly — an outdated version may miss new bypass techniques. freeRASP also periodically updates its universal binary; subscribe to the [freeRASP releases](https://github.com/talsec/Free-RASP-ReactNative/releases) feed.
+- **App Check provider deprecations**: SafetyNet is deprecated in favor of Play Integrity on Android. Ensure you are using current providers before Google fully sunsets legacy ones.

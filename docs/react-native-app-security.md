@@ -2145,3 +2145,21 @@ flowchart TD
 ```
 
 Each layer independently reduces a category of attack. Bypassing all six simultaneously requires decrypting hardware-backed storage, passing device integrity checks, bypassing app integrity verification and continuous RASP monitoring, bypassing certificate pinning, forging a valid attestation token, AND producing convincing behavioral biometrics — a dramatically higher bar for any attacker.
+
+### Best Practices
+
+**Enforcement, not just detection**: Don't just log JailMonkey or freeRASP results — act on them. Block access or restrict features when device integrity or app integrity fails. Enforce App Check at the backend, not just as a client-side flag.
+
+**Never trust the client**: JailMonkey and freeRASP results can be spoofed on the free-tier universal binary by a sufficiently advanced attacker. Send device signals to your backend as risk inputs, not as trusted facts. Backend enforcement (App Check token verification, Sardine risk scoring) should be the authoritative decision layer. freeRASP RASP+ partially closes this gap with app-specific hardened binaries, but defense-in-depth still applies.
+
+**Understand freeRASP's download cap before launch**: The free tier is capped at 100,000 downloads under the Fair Usage Policy. Review your growth trajectory before shipping — exceeding the cap without an active RASP+ upgrade breaks the FUP. If you cannot commit to RASP+ costs yet, continue with JailMonkey (no cap) and add freeRASP once you have budget.
+
+**Fail secure**: If an App Check token is missing or invalid, reject the request with a 401. Don't fall through to an unprotected code path.
+
+**Use different session keys per flow**: For Sardine, generate a fresh server-side session key per user session and per sensitive flow (onboarding, payment). This prevents session replay and improves signal quality.
+
+**Separate debug and production configurations**: Use environment variables and build variants to ensure debug providers (App Check debug token, Sardine sandbox) never reach production. Audit your CI/CD pipeline to enforce this.
+
+**Don't export secrets in your JS bundle**: API keys, client secrets, and backend URLs in your JS bundle are extractable. Use environment injection at build time and backend-for-frontend (BFF) patterns to keep secrets server-side.
+
+**Certificate pinning and payload encryption**: See [Section 7](#7-network-security-ssl-pinning-and-api-payload-encryption) for full implementation guidance. SSL pinning is especially important on rooted/jailbroken devices that may have custom CAs installed — JailMonkey detects the rooted state, but pinning is what prevents traffic interception even on devices that slip through.

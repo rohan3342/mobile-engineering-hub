@@ -1,4 +1,4 @@
-# React Native Security: A Defense-in-Depth Architecture Guide
+# React Native Security: A Defense-in-Depth Implementation Guide
 
 ---
 
@@ -849,6 +849,8 @@ Tokens are short-lived, rate-limited by the platform provider (Google Play Integ
 Never ship the debug provider to production. Use environment-based configuration (as shown above) and store platform-specific debug tokens (`FIREBASE_DEBUG_TOKEN_ANDROID`, `FIREBASE_DEBUG_TOKEN_IOS`) in `.env` files that are gitignored. Register each token in the Firebase Console under **App Check > Apps > Manage debug tokens** — one entry per platform per environment.
 
 ---
+
+> **Fintech and financial services only.** Skip this section if your app doesn't process payments, KYC, or money movement.
 
 ## 5. Sardine SDK — Transaction Fraud Prevention
 

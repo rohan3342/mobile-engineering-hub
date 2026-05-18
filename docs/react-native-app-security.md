@@ -1,5 +1,18 @@
 # React Native Security: A Defense-in-Depth Implementation Guide
 
+> **Last reviewed:** May 2025 — Tested against React Native 0.76+, freeRASP 4.x, and Firebase App Check v1.x. Security tooling evolves fast; always verify library versions and changelogs before shipping.
+ 
+---
+ 
+## Prerequisites
+ 
+This guide is for engineers building React Native apps that handle user accounts, sensitive data, or financial transactions. It assumes you are comfortable with:
+ 
+- TypeScript and React hooks
+- Basic iOS/Android build tooling (Gradle, CocoaPods)
+- A Firebase project already set up and connected to your app
+No prior security expertise is required — each tool is explained from first principles, with the threat it addresses and the reasoning behind each implementation decision.
+
 ---
 
 ## 1. Introduction
@@ -856,7 +869,7 @@ Never ship the debug provider to production. Use environment-based configuration
 
 >  Sardine collects behavioral signals (keystroke timing, swipe patterns, device fingerprint) during user flows and streams them to its risk engine. Your backend queries a risk score using the session key before approving a transaction. It closes the gap that device integrity and request attestation cannot address: *is this user behaving like a real human?*
 
-> **Who this section is for**: Sardine is purpose-built for **fintech and financial services** applications — payments, lending, KYC, account opening, and money movement. If your app doesn't operate in a financial context, JailMonkey and App Check are likely sufficient. For fintechs, Sardine fills the gap neither of those tools can address: *behavioral* risk at the user level.
+> Sardine is purpose-built for **fintech and financial services** applications — payments, lending, KYC, account opening, and money movement. If your app doesn't operate in a financial context, JailMonkey and App Check are likely sufficient. For fintechs, Sardine fills the gap neither of those tools can address: *behavioral* risk at the user level.
 
 ### What Sardine Provides
 

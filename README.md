@@ -17,7 +17,12 @@ The repository is organized by topic, with all related visual assets stored in a
 
 ```text
 mobile-engineering-hub/
-├── README.md                  # You are here!
-├── assets/                    # Flow diagrams, architecture charts, and images
-├── docs/              # Deep dives and guides for React Native
-    └── 01-app-security-threats-most-ignore.md
+├── README.md
+├── SUMMARY.md
+├── .gitbook.yaml
+├── assets/
+└── docs/
+    └── security/
+        ├── 01-rn-security-defense-in-depth.md
+        └── 02-security-checklist.md
+```

@@ -84,7 +84,7 @@ No single tool solves mobile security. A robust solution is layered:
 | Layer | Tool | Threat Addressed |
 |---|---|---|
 | Device Integrity | JailMonkey | Rooted/jailbroken devices, emulators, debug mode |
-| Runtime Application Self-Protection | freeRASP *(free tier: 100k download cap — see Section 3)* | App tampering detection, hook detection, unofficial stores, screen capture blocking, obfuscation bypass, VPN / time / location spoofing |
+| Runtime Application Self-Protection | freeRASP *(free tier: 100k download cap — see [Section 3](#3-freerasp--full-runtime-application-self-protection))* | App tampering detection, hook detection, unofficial stores, screen capture blocking, obfuscation bypass, VPN / time / location spoofing |
 | Backend Abuse Protection | Firebase App Check | Unauthorized API/database access, bot traffic |
 | Transaction Fraud Prevention | Sardine SDK *(fintech)* | Fraud, account takeover, risky onboarding |
 | Data at Rest & Authentication | MMKV + Keychain + Biometrics | Credential theft, storage extraction, unattended access |
@@ -98,12 +98,12 @@ This guide's tooling directly addresses six of the [OWASP Mobile Top 10 (2024)](
 
 | OWASP Category | Risk | This Guide's Defense |
 |---|---|---|
-| M1 — Improper Credential Usage | Hardcoded secrets, insecure credential storage in plaintext | Keychain + Biometrics (Section 6); env-var injection at build time (Section 8) |
-| M2 — Inadequate Supply Chain Security | Tampered dependencies, repackaged or resigned binaries | freeRASP `appIntegrity` callback (Section 3) |
-| M3 — Insecure Authentication / Authorization | Weak or bypassable authentication flows | Biometrics + Keychain `BIOMETRY_ANY` access control (Section 6) |
-| M5 — Insecure Communication | MITM attacks, plaintext traffic, TLS misconfiguration | SSL Pinning + Payload Encryption (Section 7) |
+| M1 — Improper Credential Usage | Hardcoded secrets, insecure credential storage in plaintext | Keychain + Biometrics ([Section 6](#6-securing-data-at-rest-and-authentication)); env-var injection at build time ([Section 8](#8-code-obfuscation-and-secret-management)) |
+| M2 — Inadequate Supply Chain Security | Tampered dependencies, repackaged or resigned binaries | freeRASP `appIntegrity` callback ([Section 3](#3-freerasp--full-runtime-application-self-protection)) |
+| M3 — Insecure Authentication / Authorization | Weak or bypassable authentication flows | Biometrics + Keychain `BIOMETRY_ANY` access control ([Section 6](#6-securing-data-at-rest-and-authentication)) |
+| M5 — Insecure Communication | MITM attacks, plaintext traffic, TLS misconfiguration | SSL Pinning + Payload Encryption ([Section 7](#7-network-security-ssl-pinning-and-api-payload-encryption)) |
 | M8 — Security Misconfiguration | Debug mode in production builds, exposed API keys in JS bundle | JailMonkey `isDebuggedMode`; ProGuard/Hermes obfuscation; `__DEV__` guards |
-| M9 — Insecure Data Storage | Unencrypted tokens, plaintext credentials in AsyncStorage | Encrypted MMKV + Keychain (Section 6) |
+| M9 — Insecure Data Storage | Unencrypted tokens, plaintext credentials in AsyncStorage | Encrypted MMKV + Keychain ([Section 6](#6-securing-data-at-rest-and-authentication)) |
 
 M4 (Insufficient Input/Output Validation), M6 (Inadequate Privacy Controls), M7 (Insufficient Binary Protections), and M10 (Insufficient Cryptography) fall outside this guide's scope but remain equally important for a complete production security posture. M7 is partially mitigated by freeRASP's obfuscation detection callback, which flags when your Android release build was shipped without ProGuard.
 
@@ -251,7 +251,7 @@ JailMonkey's checks run entirely on the device. A sufficiently advanced attacker
 - Sending device integrity signals to your backend for risk scoring
 - Satisfying compliance requirements around device posture
 
-Treat the results as **risk signals**, not absolute truth. Combine them with server-side enforcement (which is where Firebase App Check comes in).
+Treat the results as **risk signals**, not absolute truth. Combine them with server-side enforcement (which is where [Firebase App Check comes in](#4-firebase-app-check--backend-abuse-protection)).
 
 The diagram below shows how JailMonkey fits into a layered trust decision — the client-side block stops casual attackers, but backend enforcement is the authoritative layer:
 
@@ -1614,7 +1614,7 @@ React Native apps have two distinct code layers that require separate obfuscatio
 | **JS bundle** | Application logic, UI, API calls | Hermes bytecode compilation | **Automatic** — enabled by default since RN 0.64 (Android) / 0.70 (iOS) |
 | **Native layer** (Java / Kotlin / ObjC / Swift) | Native modules, bridges, platform bindings | ProGuard / R8 (Android); Swift compiler optimizations (iOS) | **Android: must be explicitly enabled.** iOS: compiler strips symbols in release builds. |
 
-freeRASP's `obfuscationIssues` callback (Section 3) fires specifically when it detects that your Android release APK was compiled **without ProGuard/R8**. This is the check that enforces native-layer obfuscation — not JS bundle obfuscation.
+freeRASP's `obfuscationIssues` callback ([Section 3](#3-freerasp--full-runtime-application-self-protection)) fires specifically when it detects that your Android release APK was compiled **without ProGuard/R8**. This is the check that enforces native-layer obfuscation — not JS bundle obfuscation.
 
 ### Enabling ProGuard / R8 on Android (Required)
 
@@ -1686,7 +1686,7 @@ flowchart LR
 
 **3. Runtime key fetching (for public keys, config)**
 
-For values that must be fetched dynamically (e.g., the server public key for payload encryption), fetch them from a secured endpoint at startup and cache them in encrypted MMKV, as described in Section 7. Never hardcode them in the bundle.
+For values that must be fetched dynamically (e.g., the server public key for payload encryption), fetch them from a secured endpoint at startup and cache them in encrypted MMKV, as described in [Section 7](#7-network-security-ssl-pinning-and-api-payload-encryption). Never hardcode them in the bundle.
 
 ---
 
@@ -2208,7 +2208,7 @@ Together, they answer six fundamental security questions:
 
 1. **Can I trust what's stored on this device?** — MMKV (encrypted) + Keychain + Biometrics
 2. **Can I trust this device?** — JailMonkey
-3. **Is the app unmodified and running in a clean runtime?** — freeRASP *(app integrity verification, kill-on-bypass, screen capture blocking — see Section 3 for free-tier limits)*
+3. **Is the app unmodified and running in a clean runtime?** — freeRASP *(app integrity verification, kill-on-bypass, screen capture blocking — [see Section 3](#3-freerasp--full-runtime-application-self-protection) for free-tier limits)*
 4. **Can I trust this network channel?** — SSL Pinning + Payload Encryption
 5. **Can I trust this request came from my app?** — Firebase App Check
 6. **Can I trust this user's behavior is legitimate?** — Sardine SDK *(fintech)*

@@ -335,6 +335,8 @@ const buildDeviceIntegrityPayload = async (): Promise<DeviceIntegrityPayload> =>
 
 Send this payload on every authenticated request — not just at startup. A device can be rooted while the app is running, or root-hiding tools can fail mid-session. Attaching the integrity payload as a signed header claim gives your backend continuous visibility and an audit trail per request.
 
+> **Validating this in practice**: See [Section 9 — Security Testing and Validation](#9-security-testing-and-validation) for how to verify JailMonkey's detection path using a rooted device and automated regression tests.
+
 ```mermaid
 sequenceDiagram
    participant App as React Native App
@@ -613,6 +615,8 @@ If your app already uses JailMonkey, the migration is straightforward — freeRA
 
 > Your `sendRiskSignalToBackend` utility function remains unchanged — it is called identically from both JailMonkey and freeRASP callbacks.
 
+> **Validating this in practice**: See [Section 9 — Security Testing and Validation](#9-security-testing-and-validation) for Frida hook testing, app repackaging tests, and how to validate the `appIntegrity` callback using a resigned APK.
+
 ---
 
 ## 4. Firebase App Check — Backend Abuse Protection
@@ -861,6 +865,8 @@ Tokens are short-lived, rate-limited by the platform provider (Google Play Integ
 
 Never ship the debug provider to production. Use environment-based configuration (as shown above) and store platform-specific debug tokens (`FIREBASE_DEBUG_TOKEN_ANDROID`, `FIREBASE_DEBUG_TOKEN_IOS`) in `.env` files that are gitignored. Register each token in the Firebase Console under **App Check > Apps > Manage debug tokens** — one entry per platform per environment.
 
+> **Validating this in practice**: See [Section 9 — Security Testing and Validation](#9-security-testing-and-validation) for how to verify that requests without a valid App Check token are correctly rejected by your backend middleware.
+
 ---
 
 > **Fintech and financial services only.** Skip this section if your app doesn't process payments, KYC, or money movement.
@@ -1034,6 +1040,8 @@ This decision tree gives your risk team actionable signal at every level:
 | `high` | Manual review queue | Borderline — preserve human judgment, do not auto-reject |
 | `very_high` | Automatic rejection | High confidence of fraud or bot — reject immediately |
 
+> **Validating this in practice**: See [Section 9 — Security Testing and Validation](#9-security-testing-and-validation) for how to verify behavioral signal capture using the Sardine sandbox API and how to simulate all four risk levels.
+
 ---
 
 ## 6. Securing Data at Rest and Authentication
@@ -1072,28 +1080,70 @@ flowchart TB
 
 ### MMKV Storage — Encrypted Local Storage
 
-[`react-native-mmkv-storage`](https://github.com/ammarahm-ed/react-native-mmkv-storage) is a fast, persistent key-value store backed by Tencent's MMKV framework. Out of the box it is **not encrypted** — but it supports hardware-backed encryption that must be opted into explicitly.
+[`react-native-mmkv`](https://github.com/mrousavy/react-native-mmkv) is a fast, persistent key-value store backed by Tencent's MMKV framework, maintained by Marc Rousavy (Margelo). It is the actively maintained community standard — `react-native-mmkv-storage` (ammarahm-ed) is an older alternative that has seen little activity in recent years and uses a different API. Use `react-native-mmkv`.
+
+Out of the box, an MMKV instance is **not encrypted**. Encryption is opt-in and must be configured explicitly at initialization time.
 
 #### Why it matters
 
 Apps routinely store flags, user preferences, session metadata, and even partial credentials in local storage. On a rooted Android device or a jailbroken iPhone, any unencrypted storage file can be read directly from the filesystem. Encryption at rest ensures that even if storage is extracted, the contents are unreadable without the key.
 
+#### Installation
+
+```bash
+yarn add react-native-mmkv
+cd ios && pod install
+```
+
 #### Default vs. encrypted initialization
 
 ```ts
-import { MMKVLoader } from 'react-native-mmkv-storage';
+import { MMKV } from 'react-native-mmkv';
 
-// ❌ Default — unencrypted, fine for non-sensitive data
-const storage = new MMKVLoader().initialize();
+// ❌ Default — unencrypted, fine for non-sensitive data only
+const storage = new MMKV();
 
-// ✅ Encrypted — recommended for anything security-relevant
-const secureStorage = new MMKVLoader().withEncryption().initialize();
-
-// ✅ Custom key — useful when you derive the key from a user secret or device ID
-const secureStorage = new MMKVLoader().encryptWithCustomKey('your-derived-key').initialize();
+// ✅ Encrypted — required for anything security-relevant
+const secureStorage = new MMKV({
+  id: 'secure-storage',
+  encryptionKey: 'your-derived-key', // see key management note below
+});
 ```
 
-When `withEncryption()` is used, MMKV generates and stores the encryption key in the platform's secure enclave (Android Keystore / iOS Secure Enclave). With `encryptWithCustomKey`, you supply the key yourself — useful if you derive it from a user credential or a value from Keychain.
+#### Key management — where the encryption key comes from
+
+The `encryptionKey` must come from somewhere secure — **never hardcode it in the JS bundle**. Two patterns work well in practice:
+
+```ts
+import { MMKV } from 'react-native-mmkv';
+import * as Keychain from 'react-native-keychain';
+import { getRandomBytesAsync } from 'expo-crypto'; // or react-native-quick-crypto
+
+const KEYCHAIN_SERVICE = 'com.yourapp.mmkv-key';
+
+// Generate and store the key on first launch, retrieve it on subsequent launches
+async function getOrCreateMMKVKey(): Promise<string> {
+  const existing = await Keychain.getGenericPassword({ service: KEYCHAIN_SERVICE });
+  if (existing) return existing.password;
+
+  // First launch — generate a random 256-bit key
+  const keyBytes = await getRandomBytesAsync(32);
+  const key = Buffer.from(keyBytes).toString('base64');
+
+  await Keychain.setGenericPassword('mmkv-key', key, {
+    service: KEYCHAIN_SERVICE,
+    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  });
+
+  return key;
+}
+
+// At app startup, before any reads or writes:
+const encryptionKey = await getOrCreateMMKVKey();
+const secureStorage = new MMKV({ id: 'secure-storage', encryptionKey });
+```
+
+This pattern generates the key once, stores it in the hardware-backed Keychain, and retrieves it on every subsequent launch. The MMKV data is only as secure as the key — so storing the key in Keychain (covered in the next section) is not optional.
 
 #### What to store where
 
@@ -1103,33 +1153,33 @@ When `withEncryption()` is used, MMKV generates and stores the encryption key in
 | Session metadata, device IDs, security flags | Encrypted MMKV |
 | Passwords, auth tokens, biometric-protected secrets | Keychain (see below) |
 
-> **Note**: The default `new MMKVLoader().initialize()` creates an unencrypted store. For any data that is security-relevant — session tokens, device identifiers, biometric enrollment flags, or access-control timestamps — use the encrypted instance in production.
+> **Note**: A plain `new MMKV()` instance is unencrypted. For any data that is security-relevant — session tokens, device identifiers, biometric enrollment flags, or access-control timestamps — always pass an `encryptionKey` sourced from Keychain.
 
 #### Migrating from AsyncStorage to Encrypted MMKV
 
-If your app currently stores data in `@react-native-async-storage/async-storage`, a one-time migration at the next app version is the cleanest path to encrypted-at-rest storage. The migration is **idempotent** — it is safe to run on every startup until the flag confirms completion:
+If your app currently stores data in `@react-native-async-storage/async-storage`, a one-time migration at the next app version is the cleanest path to encrypted-at-rest storage. The migration is **idempotent** — safe to run on every startup until the completion flag is set:
 
 ```ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { MMKVLoader } from 'react-native-mmkv-storage';
+import { MMKV } from 'react-native-mmkv';
 
 const MIGRATION_KEY = 'ASYNC_STORAGE_MIGRATED_V1';
 
 export const migrateAsyncStorageToMMKV = async (
- secureStorage: ReturnType<MMKVLoader['initialize']>,
+  secureStorage: MMKV,
 ): Promise<void> => {
- if (secureStorage.getBool(MIGRATION_KEY)) return; // already done
+  if (secureStorage.getBoolean(MIGRATION_KEY)) return; // already done
 
- const keys = await AsyncStorage.getAllKeys();
- const entries = await AsyncStorage.multiGet(keys);
+  const keys = await AsyncStorage.getAllKeys();
+  const entries = await AsyncStorage.multiGet(keys);
 
- for (const [key, value] of entries) {
-   if (value !== null) secureStorage.setString(key, value);
- }
+  for (const [key, value] of entries) {
+    if (value !== null) secureStorage.set(key, value);
+  }
 
- // Write the flag BEFORE clearing — if clearing fails on retry, writes are idempotent
- secureStorage.setBool(MIGRATION_KEY, true);
- await AsyncStorage.multiRemove(keys);
+  // Write the flag BEFORE clearing — if clearing fails on retry, writes are idempotent
+  secureStorage.set(MIGRATION_KEY, true);
+  await AsyncStorage.multiRemove(keys);
 };
 ```
 
@@ -1180,7 +1230,7 @@ The combination of `BIOMETRY_ANY` + `WHEN_UNLOCKED` means the OS will **not rele
 
 ### react-native-biometrics — Biometric Authentication Gate
 
-[`react-native-biometrics`](https://github.com/SelfLearningIO/react-native-biometrics) provides a clean interface over Face ID, Touch ID, and Android biometrics. Used alongside Keychain, it forms the **authentication gate** that controls when stored credentials can be accessed.
+[`react-native-biometrics`](https://github.com/mbecker20/react-native-biometrics) provides a clean interface over Face ID, Touch ID, and Android biometrics. Used alongside Keychain, it forms the **authentication gate** that controls when stored credentials can be accessed.
 
 #### Why it matters
 
@@ -1505,6 +1555,8 @@ apiClient.interceptors.request.use(async (config) => {
 > **Note**: Payload encryption adds complexity and latency. Apply it selectively to your highest-sensitivity endpoints rather than globally. Measure the round-trip overhead under production load conditions before rolling it out broadly.
 
 **Key distribution**: Never hardcode the server public key in your JS bundle. Fetch it from a secured key distribution endpoint (protected by App Check + SSL pinning) at app startup and cache it in encrypted MMKV storage.
+
+> **Validating this in practice**: See [Section 9 — Security Testing and Validation](#9-security-testing-and-validation) for the MITM proxy test and certificate rotation test procedure.
 
 ---
 
@@ -2195,7 +2247,7 @@ Security is not a one-time setup. After deploying these tools, maintain ongoing 
  
 The full pre-launch checklist — covering Device Integrity, Runtime Protection, App Check, SSL Pinning, Data at Rest, Payload Encryption, Sardine, and Build Configuration — lives in its own dedicated file so it can be bookmarked, printed, or dropped into a ticket independently of this guide.
  
-→ **[React Native Security — Pre-Launch Checklist](./02-security-checklist.md)**
+**[React Native Security — Pre-Launch Checklist](./02-security-checklist.md)**
 
 
 ## 11. Conclusion
@@ -2245,4 +2297,3 @@ flowchart LR
 ---
 
 *The libraries and patterns discussed in this article are actively maintained. Always pin to specific versions in production and subscribe to their security advisories. The code examples above are illustrative and should be adapted to your app's architecture and threat model.*
-

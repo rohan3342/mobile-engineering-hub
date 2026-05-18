@@ -37,7 +37,8 @@ Use this as a gate before shipping to production. Every item maps back to the [D
 ## Data at Rest
 
 - [ ] `AsyncStorage` not used for any security-relevant data
-- [ ] Encrypted MMKV (`withEncryption()`) used for session metadata and device identifiers
+- [ ] Encrypted MMKV (`new MMKV({ encryptionKey })`) used for session metadata and device identifiers
+- [ ] MMKV encryption key generated on first launch, stored in Keychain — never hardcoded in the bundle
 - [ ] Credentials stored in Keychain with `BIOMETRY_ANY` + `WHEN_UNLOCKED` access control
 - [ ] `resetGenericPassword` called on logout or session expiry
 - [ ] AsyncStorage → MMKV migration completed (if applicable)
@@ -56,6 +57,33 @@ Use this as a gate before shipping to production. Every item maps back to the [D
 - [ ] `trackPage`, `trackTextChange`, `trackFocusChange` instrumented on all key flows
 - [ ] `submitData()` called before backend decision requests (payment/onboarding)
 - [ ] Backend maps all four risk levels (`low`, `medium`, `high`, `very_high`) to distinct actions
+
+## Testing & Validation
+
+### Device Integrity & Runtime Protection
+- [ ] JailMonkey detection verified on a physical rooted (Android) and jailbroken (iOS) device
+- [ ] freeRASP `privilegedAccess` callback confirmed on a rooted test device
+- [ ] freeRASP `hooks` callback confirmed using Frida (`frida -U -l test-hook.js -f com.yourapp`)
+- [ ] freeRASP `appIntegrity` callback confirmed by sideloading a repackaged + re-signed APK
+- [ ] Backend receives and logs `device_integrity=false` signal on compromised device
+
+### Firebase App Check
+- [ ] Requests without `X-Firebase-AppCheck` header return 401
+- [ ] Requests with malformed or expired token return 401
+- [ ] Play Integrity cold-start retry logic verified on fresh Android install
+
+### SSL Pinning
+- [ ] MITM proxy test passed: request fails with `SSLPinningError` when proxy CA is installed
+- [ ] Backup pin rotation test passed: API calls succeed with only the backup pin active
+
+### Sardine *(fintech apps only)*
+- [ ] Behavioral signals (`trackPage`, `trackTextChange`, `trackFocusChange`) visible in Sardine sandbox API response
+- [ ] All four risk levels (`low`, `medium`, `high`, `very_high`) trigger correct backend actions in staging
+
+### CI / Automated Regression
+- [ ] Unit tests mock JailMonkey and assert `isDeviceSecure` hook behaves correctly
+- [ ] ESLint `no-restricted-imports` rule bans `@react-native-async-storage/async-storage`
+- [ ] Release build pipeline confirms ProGuard and Hermes are enabled before signing
 
 ## Build Configuration
 

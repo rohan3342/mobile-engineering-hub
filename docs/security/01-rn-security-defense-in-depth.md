@@ -86,7 +86,7 @@ No single tool solves mobile security. A robust solution is layered:
 | Device Integrity | JailMonkey | Rooted/jailbroken devices, emulators, debug mode |
 | Runtime Application Self-Protection | freeRASP *(free tier: 100k download cap — see [Section 3](#3-freerasp--full-runtime-application-self-protection))* | App tampering detection, hook detection, unofficial stores, screen capture blocking, obfuscation bypass, VPN / time / location spoofing |
 | Backend Abuse Protection | Firebase App Check | Unauthorized API/database access, bot traffic |
-| Transaction Fraud Prevention | Sardine SDK *(fintech)* | Fraud, account takeover, risky onboarding |
+| Transaction Fraud Prevention | Sardine SDK *(banking & payments)* | Fraud, account takeover, risky onboarding |
 | Data at Rest & Authentication | MMKV + Keychain + Biometrics | Credential theft, storage extraction, unattended access |
 | Network Transport | SSL Pinning + Payload Encryption | MITM attacks, TLS interception, in-transit data exposure |
 
@@ -362,7 +362,7 @@ sequenceDiagram
 
 > freeRASP is a **Runtime Application Self-Protection (RASP)** library by [Talsec](https://www.talsec.app) that significantly extends beyond JailMonkey's device integrity checks. It detects rooted/jailbroken devices, runtime hooks (Frida/Xposed), debugger attachment, emulators, unofficial app stores, **app integrity tampering** (repackaged or modified builds), obfuscation bypass, screen capture, VPN usage, time/location spoofing, and more — all through a single React Native hook with a unified callback API and a kill-on-bypass enforcement mode.
 
-> ⚠️ **Pricing caveat — read before integrating**: freeRASP is **freemium** software governed by a [Fair Usage Policy (FUP)](https://docs.talsec.app/freerasp/fair-usage-policy-fup). The free tier is **capped at 100,000 app downloads**. Beyond that threshold, you must upgrade to the paid **RASP+** plan. RASP+ also removes Talsec data collection, replaces the universal free binary with an **app-specific hardened binary** (significantly harder to bypass), and adds the **AppiCrypt®** API integrity cryptogram. For a banking or fintech app with a real user base, treat RASP+ as the realistic production target and budget for it accordingly.
+> ⚠️ **Pricing caveat — read before integrating**: freeRASP is **freemium** software governed by a [Fair Usage Policy (FUP)](https://docs.talsec.app/freerasp/fair-usage-policy-fup). The free tier is **capped at 100,000 app downloads**. Beyond that threshold, you must upgrade to the paid **RASP+** plan. RASP+ also removes Talsec data collection, replaces the universal free binary with an **app-specific hardened binary** (significantly harder to bypass), and adds the **AppiCrypt®** API integrity cryptogram. For a banking or banking & payments app with a real user base, treat RASP+ as the realistic production target and budget for it accordingly.
 
 ### freeRASP vs JailMonkey
 
@@ -580,9 +580,9 @@ flowchart TD
 | SDK binary | Universal — bypass scripts are more reusable | App-specific hardened binary |
 | AppiCrypt® API protection | ❌ | ✅ |
 | Enterprise SLA / support | Community | Enterprise SLA |
-| Fintech compliance features | Limited | Full |
+| Banking & payments compliance features | Limited | Full |
 
-**Recommendation for production fintech apps**:
+**Recommendation for production banking & payments apps**:
 
 - **Development and early testing**: the free tier is fine.
 - **Production at scale (> 100k downloads)**: budget for **RASP+** upfront. The free binary is also a universal binary — the same build is shared across all free-tier integrators, making community-developed bypass scripts more broadly applicable. RASP+ generates app-specific hardened binaries, raising the effort required to reverse-engineer or bypass significantly.
@@ -869,13 +869,13 @@ Never ship the debug provider to production. Use environment-based configuration
 
 ---
 
-> **Fintech and financial services only.** Skip this section if your app doesn't process payments, KYC, or money movement.
+> **Banking & payments apps only.** Skip this section if your app doesn't process payments, KYC, or money movement.
 
 ## 5. Sardine SDK — Transaction Fraud Prevention
 
 >  Sardine collects behavioral signals (keystroke timing, swipe patterns, device fingerprint) during user flows and streams them to its risk engine. Your backend queries a risk score using the session key before approving a transaction. It closes the gap that device integrity and request attestation cannot address: *is this user behaving like a real human?*
 
-> Sardine is purpose-built for **fintech and financial services** applications — payments, lending, KYC, account opening, and money movement. If your app doesn't operate in a financial context, JailMonkey and App Check are likely sufficient. For fintechs, Sardine fills the gap neither of those tools can address: *behavioral* risk at the user level.
+> Sardine is purpose-built for **banking & payments** applications — payments, lending, KYC, account opening, and money movement. If your app doesn't operate in a financial context, JailMonkey and App Check are likely sufficient. For banking & payments apps, Sardine fills the gap neither of those tools can address: *behavioral* risk at the user level.
 
 ### What Sardine Provides
 
@@ -2200,7 +2200,7 @@ flowchart TD
    LAYER4 -->|Token verified by backend| LAYER5
    LAYER4 -->|Invalid token| BLOCKED
 
-   subgraph LAYER5["Layer 5 — Behavioral Risk  fintech "]
+   subgraph LAYER5["Layer 5 — Behavioral Risk (banking & payments) "]
        L5[Sardine SDK — device fingerprint + behavioral biometrics]
    end
 
@@ -2254,7 +2254,7 @@ The full pre-launch checklist — covering Device Integrity, Runtime Protection,
 
 Mobile security in React Native is not a single checkbox — it is a continuously maintained set of layers that address different threat vectors at different points in the stack.
 
-**JailMonkey** gives you visibility into device integrity before your app does anything sensitive. **freeRASP** takes that further as a full RASP layer — adding app integrity verification (detecting repackaged or tampered builds), kill-on-bypass enforcement, screen capture blocking, and a broader set of runtime threat detections; the free tier is **capped at 100,000 app downloads** and production fintech deployments will need the paid **RASP+** plan. **Firebase App Check** ensures your backend APIs only respond to legitimate app traffic, eliminating an entire class of automated abuse and bot attacks. **SSL pinning and payload encryption** harden the network transport layer against interception — even on devices that slip through integrity checks. **Sardine SDK** adds behavioral and transactional intelligence that detects fraud at the human level. And **MMKV, Keychain, and Biometrics** ensure that even if the device is compromised, stored credentials and sensitive data remain protected.
+**JailMonkey** gives you visibility into device integrity before your app does anything sensitive. **freeRASP** takes that further as a full RASP layer — adding app integrity verification (detecting repackaged or tampered builds), kill-on-bypass enforcement, screen capture blocking, and a broader set of runtime threat detections; the free tier is **capped at 100,000 app downloads** and production banking & payments deployments will need the paid **RASP+** plan. **Firebase App Check** ensures your backend APIs only respond to legitimate app traffic, eliminating an entire class of automated abuse and bot attacks. **SSL pinning and payload encryption** harden the network transport layer against interception — even on devices that slip through integrity checks. **Sardine SDK** adds behavioral and transactional intelligence that detects fraud at the human level. And **MMKV, Keychain, and Biometrics** ensure that even if the device is compromised, stored credentials and sensitive data remain protected.
 
 Together, they answer six fundamental security questions:
 
@@ -2263,7 +2263,7 @@ Together, they answer six fundamental security questions:
 3. **Is the app unmodified and running in a clean runtime?** — freeRASP *(app integrity verification, kill-on-bypass, screen capture blocking — [see Section 3](#3-freerasp--full-runtime-application-self-protection) for free-tier limits)*
 4. **Can I trust this network channel?** — SSL Pinning + Payload Encryption
 5. **Can I trust this request came from my app?** — Firebase App Check
-6. **Can I trust this user's behavior is legitimate?** — Sardine SDK *(fintech)*
+6. **Can I trust this user's behavior is legitimate?** — Sardine SDK *(banking & payments)*
 
 The cost of not implementing these safeguards is not hypothetical. Fraudsters actively target mobile apps precisely because many teams treat security as an afterthought. Meanwhile, the tooling to implement meaningful, layered defenses has never been more accessible.
 
@@ -2275,7 +2275,7 @@ flowchart LR
    P1B["Phase 1b\nRuntime Protection\n---\nfreeRASP\nfree tier: 100k cap\nRASP+ for production scale"]
    P2["Phase 2\nBackend Protection\n---\nFirebase App Check\nenforced on backend"]
    P3["Phase 3\nNetwork Layer\n---\nSSL Pinning\nPayload Encryption\non sensitive endpoints"]
-   P4["Phase 4\nBehavioral Risk\n---\nSardine SDK\nfintech only"]
+   P4["Phase 4\nBehavioral Risk\n---\nSardine SDK\nbanking & payments only"]
 
    P1 --> P1B --> P2 --> P3 --> P4
 

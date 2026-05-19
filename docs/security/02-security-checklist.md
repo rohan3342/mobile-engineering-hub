@@ -50,7 +50,7 @@ Use this as a gate before shipping to production. Every item maps back to the [D
 - [ ] AES-256-GCM used with a unique per-request IV and GCM auth tag
 - [ ] Applied selectively to highest-sensitivity endpoints, not globally
 
-## Sardine SDK *(fintech apps only)*
+## Sardine SDK *(banking & payments apps only)*
 
 - [ ] SDK initialized with a feature-flag kill-switch for instant remote rollback
 - [ ] UUID session key injected as `X-Sardine-Session-Key` on all requests
@@ -76,7 +76,7 @@ Use this as a gate before shipping to production. Every item maps back to the [D
 - [ ] MITM proxy test passed: request fails with `SSLPinningError` when proxy CA is installed
 - [ ] Backup pin rotation test passed: API calls succeed with only the backup pin active
 
-### Sardine *(fintech apps only)*
+### Sardine *(banking & payments apps only)*
 - [ ] Behavioral signals (`trackPage`, `trackTextChange`, `trackFocusChange`) visible in Sardine sandbox API response
 - [ ] All four risk levels (`low`, `medium`, `high`, `very_high`) trigger correct backend actions in staging
 

@@ -6,14 +6,14 @@
 
 ## Prerequisites
 
-This guide is for engineers building authenticated React Native apps — from general consumer apps to fintech and regulated products. It assumes you are comfortable with:
+This guide is for engineers building authenticated React Native apps — from general consumer apps to banking, payments, and regulated products. It assumes you are comfortable with:
 
 - TypeScript and React hooks
 - HTTP fundamentals (headers, cookies, status codes)
 - A backend already running (Node/Express or Spring Boot examples provided)
 - An Auth0 tenant set up, or familiarity with a comparable IdP (Cognito, Firebase Auth)
 
-Sections marked **fintech** are relevant specifically to apps handling payments, KYC, lending, or money movement. General-purpose apps can skip those sections without losing continuity.
+Sections marked **banking & payments** are relevant specifically to apps handling payments, KYC, lending, or money movement. General-purpose apps can skip those sections without losing continuity.
 
 This guide builds on top of the [React Native Security: Defense-in-Depth Implementation Guide](../security/01-rn-security-defense-in-depth.md). Token storage, Keychain usage, and biometric patterns here assume the security stack described there is already in place.
 
@@ -130,6 +130,131 @@ yarn add react-native-auth0
 cd ios && pod install
 ```
 
+### Environment Configuration — Multi-Tenant Auth0 Setup
+
+Auth0 requires **separate tenants per environment** — not just different env vars pointing at the same tenant. Using a single tenant across dev, staging, and production causes: test users polluting production user lists, debug tokens being accepted in prod, production secrets exposed in dev tooling, and audit logs mixed across environments.
+
+#### Tenant Structure
+
+Create three tenants in Auth0:
+
+```
+yourapp-dev.auth0.com      → development / local
+yourapp-staging.auth0.com  → CI + QA + staging
+yourapp-prod.auth0.com     → production (App Store / Play Store)
+```
+
+Each tenant has its own:
+- Application (with its own Client ID)
+- API (with its own Audience identifier)
+- Allowed Callback / Logout URLs
+- Social connection credentials (separate Google/Apple app registrations per environment)
+- Custom claims Actions
+
+#### Environment Variable Structure
+
+```bash
+# .env.development
+AUTH0_DOMAIN=yourapp-dev.auth0.com
+AUTH0_CLIENT_ID=dev_client_id_here
+AUTH0_AUDIENCE=https://api.dev.yourapp.com
+API_BASE_URL=http://localhost:3000
+GOOGLE_WEB_CLIENT_ID=dev_google_client_id
+
+# .env.staging
+AUTH0_DOMAIN=yourapp-staging.auth0.com
+AUTH0_CLIENT_ID=staging_client_id_here
+AUTH0_AUDIENCE=https://api.staging.yourapp.com
+API_BASE_URL=https://api.staging.yourapp.com
+GOOGLE_WEB_CLIENT_ID=staging_google_client_id
+
+# .env.production
+AUTH0_DOMAIN=yourapp-prod.auth0.com
+AUTH0_CLIENT_ID=prod_client_id_here
+AUTH0_AUDIENCE=https://api.yourapp.com
+API_BASE_URL=https://api.yourapp.com
+GOOGLE_WEB_CLIENT_ID=prod_google_client_id
+```
+
+All `.env.*` files are gitignored. Commit a `.env.example` documenting every required variable with placeholder values — this is the contract for CI and new developers.
+
+#### CI/CD Secret Scoping
+
+In GitHub Actions (or your CI provider), use **separate Environments** to scope secrets:
+
+```yaml
+# .github/workflows/deploy.yml
+jobs:
+  deploy-staging:
+    environment: staging          # uses GitHub Environment: staging
+    steps:
+      - name: Build
+        env:
+          AUTH0_DOMAIN: ${{ secrets.AUTH0_DOMAIN }}         # staging tenant
+          AUTH0_CLIENT_ID: ${{ secrets.AUTH0_CLIENT_ID }}
+          AUTH0_AUDIENCE: ${{ secrets.AUTH0_AUDIENCE }}
+
+  deploy-production:
+    environment: production       # uses GitHub Environment: production
+    steps:
+      - name: Build
+        env:
+          AUTH0_DOMAIN: ${{ secrets.AUTH0_DOMAIN }}         # prod tenant
+          AUTH0_CLIENT_ID: ${{ secrets.AUTH0_CLIENT_ID }}
+          AUTH0_AUDIENCE: ${{ secrets.AUTH0_AUDIENCE }}
+```
+
+The same secret names resolve to different values per Environment — staging jobs never see production credentials and vice versa.
+
+#### Dev-Only JWT Decode Utility
+
+During development, inspecting the token's claims is essential for debugging custom claim issues (wrong namespace, missing KYC status, incorrect role). Add a dev-only utility — never ship this to production:
+
+```ts
+// auth/devUtils.ts
+import { jwtDecode } from 'jwt-decode';
+import { tokenStorage } from './tokenStorage';
+
+/**
+ * DEV ONLY — print decoded JWT claims to console.
+ * Automatically stripped in production builds via __DEV__ guard.
+ */
+export const inspectCurrentToken = async () => {
+  if (!__DEV__) return;
+
+  const token = await tokenStorage.getAccessToken();
+  if (!token) {
+    console.log('[Auth] No access token in Keychain');
+    return;
+  }
+
+  const decoded = jwtDecode(token);
+  console.log('[Auth] Decoded JWT claims:', JSON.stringify(decoded, null, 2));
+
+  const exp = (decoded as any).exp;
+  const expiresIn = exp - Date.now() / 1000;
+  console.log(`[Auth] Token expires in: ${Math.round(expiresIn)}s`);
+};
+```
+
+Usage during development:
+
+```ts
+// Call from a dev settings screen or useEffect during debugging
+import { inspectCurrentToken } from '../auth/devUtils';
+await inspectCurrentToken();
+
+// Example output:
+// [Auth] Decoded JWT claims: {
+//   "sub": "auth0|abc123",
+//   "https://yourapp.com/role": "user",
+//   "https://yourapp.com/kyc_status": "pending",   ← wrong, should be "verified"
+//   "aud": "https://api.yourapp.com",
+//   "exp": 1716123456
+// }
+// [Auth] Token expires in: 847s
+```
+
 ### Auth0 Application Configuration
 
 In your Auth0 dashboard, create a **Native** application (not SPA — Native gives you refresh token support without client secrets). Configure:
@@ -140,7 +265,142 @@ In your Auth0 dashboard, create a **Native** application (not SPA — Native giv
 - **Refresh Token Expiration**: Absolute expiration enabled (e.g., 30 days)
 - **Token Endpoint Authentication Method**: None (PKCE apps don't use client secrets)
 
-### Universal Login vs. Embedded Login
+### Deep Link / Callback URL Wiring
+
+Auth0's PKCE flow opens a browser (Chrome Custom Tab on Android, `ASWebAuthenticationSession` on iOS). When authentication completes, Auth0 redirects to your callback URL (`com.yourapp://auth0/callback`), which the OS uses to return control to your app. Without this wiring, the browser never closes, the callback is never received, and tokens are never stored.
+
+This is a build-time configuration step — it must be done before `authorize()` will work.
+
+#### Android — Intent Filter
+
+Add the intent filter to `android/app/src/main/AndroidManifest.xml`, inside the `<application>` tag:
+
+```xml
+<!-- android/app/src/main/AndroidManifest.xml -->
+<activity
+  android:name="com.auth0.android.provider.RedirectActivity"
+  android:exported="true">
+  <intent-filter>
+    <action android:name="android.intent.action.VIEW" />
+    <category android:name="android.intent.category.DEFAULT" />
+    <category android:name="android.intent.category.BROWSABLE" />
+    <data
+      android:host="auth0/callback"
+      android:pathPrefix=""
+      android:scheme="com.yourapp" />
+  </intent-filter>
+</activity>
+```
+
+> The `android:scheme` must exactly match the scheme in your Auth0 dashboard Callback URL. Use your app's bundle ID in reverse domain notation: `com.yourcompany.yourapp`.
+
+#### iOS — URL Scheme
+
+Add the URL scheme to `ios/YourApp/Info.plist`:
+
+```xml
+<!-- ios/YourApp/Info.plist -->
+<key>CFBundleURLTypes</key>
+<array>
+  <dict>
+    <key>CFBundleTypeRole</key>
+    <string>None</string>
+    <key>CFBundleURLName</key>
+    <string>auth0</string>
+    <key>CFBundleURLSchemes</key>
+    <array>
+      <string>com.yourapp</string>
+    </array>
+  </dict>
+</array>
+```
+
+#### iOS — AppDelegate Linking Handler
+
+In `ios/YourApp/AppDelegate.mm`, add the `openURL` handler so React Native receives the callback URL:
+
+```objc
+// ios/YourApp/AppDelegate.mm
+#import <React/RCTLinkingManager.h>
+
+- (BOOL)application:(UIApplication *)app
+            openURL:(NSURL *)url
+            options:(NSDictionary<UIApplicationOpenURLOptionsKey, id> *)options
+{
+  return [RCTLinkingManager application:app openURL:url options:options];
+}
+```
+
+#### Handling the Android Back Button
+
+When the user presses the Android hardware back button during the Auth0 Universal Login browser, the Chrome Custom Tab closes without completing the callback. The app receives no token and no error — it silently hangs in a "login started" state.
+
+Handle this with a `Linking` event listener and an explicit timeout:
+
+```ts
+// auth/useAuth0Login.ts — updated with back button + timeout handling
+import { Linking } from 'react-native';
+import { useAuth0 } from 'react-native-auth0';
+
+export const useAuth0Login = () => {
+  const { authorize, clearSession } = useAuth0();
+
+  const login = async () => {
+    // Listen for the callback URL — detects both success and user cancellation
+    const callbackPromise = new Promise<void>((_, reject) => {
+      const subscription = Linking.addEventListener('url', ({ url }) => {
+        subscription.remove();
+        if (url.includes('error=access_denied')) {
+          reject(new Error('user_cancelled'));
+        }
+      });
+    });
+
+    // Race: auth flow vs. 5-minute timeout (handles back button abandonment)
+    const authPromise = authorize({
+      audience: process.env.AUTH0_AUDIENCE!,
+      scope: 'openid profile email offline_access',
+    });
+
+    try {
+      const credentials = await Promise.race([
+        authPromise,
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('auth_timeout')), 5 * 60 * 1000),
+        ),
+      ]);
+      return credentials;
+    } catch (error: any) {
+      if (error.message === 'user_cancelled' || error.message === 'auth_timeout') {
+        // User dismissed — reset to login screen, do not treat as an error
+        return null;
+      }
+      throw error;
+    }
+  };
+
+  return { login };
+};
+```
+
+#### Verifying the Wiring
+
+Before testing on a device, verify the scheme resolves correctly:
+
+```bash
+# Android — simulate the callback URL
+adb shell am start \
+  -W -a android.intent.action.VIEW \
+  -d "com.yourapp://auth0/callback?code=test123&state=abc" \
+  com.yourapp
+
+# iOS — simulate via xcrun
+xcrun simctl openurl booted "com.yourapp://auth0/callback?code=test123&state=abc"
+```
+
+If the app opens and the `Linking` event fires, the wiring is correct. If the browser stays open or nothing happens, check that the scheme in `AndroidManifest.xml` / `Info.plist` exactly matches the Allowed Callback URL in your Auth0 dashboard.
+
+
 
 Always use **Universal Login** on mobile. Never build a custom login form that calls Auth0's authentication API directly.
 
@@ -237,7 +497,7 @@ spring:
 
 ### Auth0 Custom Claims — Injecting App Context Into Tokens
 
-Auth0 lets you inject arbitrary claims into JWTs via Actions (the successor to Rules). This is how you attach fintech-specific context — KYC status, account tier, risk flags — to every token without a database call on every request.
+Auth0 lets you inject arbitrary claims into JWTs via Actions (the successor to Rules). This is how you attach banking & payments-specific context — KYC status, account tier, risk flags — to every token without a database call on every request.
 
 ```js
 // Auth0 Action: "Add custom claims to access token"
@@ -274,11 +534,239 @@ sequenceDiagram
     Backend->>App: 200 OK + response data
 ```
 
+### MFA — Enabling and Handling In-Flow
+
+Auth0 handles MFA entirely within the Universal Login browser session — your app does not render the MFA challenge UI. However, you need to enable it in Auth0 and understand what happens in the token response so you can handle it correctly.
+
+#### Enabling MFA in Auth0
+
+In your Auth0 dashboard: **Security → Multi-factor Auth → Enable**. For banking & payments apps, configure:
+
+- **Factors**: OTP (TOTP authenticator apps) and SMS (via Twilio)
+- **Policy**: "Always" for high-security apps, or "Adaptive" (trigger on risk signals) for general apps
+- **Allow Remember Browser**: Disabled for banking & payments apps — always require MFA
+
+#### Auth0 Action — Enforce MFA for Banking & Payments Users
+
+Use an Auth0 Action to enforce MFA conditionally — only for users with a `banking` role or `kyc_verified` status:
+
+```js
+// Auth0 Action: "Enforce MFA for banking & payments users"
+exports.onExecutePostLogin = async (event, api) => {
+  const isBankingUser = event.user.app_metadata?.account_tier === 'banking'';
+  const isHighRiskLogin = event.risk?.confidence === 'low';
+
+  if (isBankingUser || isHighRiskLogin) {
+    api.multifactor.enable('any', { allowRememberBrowser: false });
+  }
+};
+```
+
+#### What the App Needs to Handle
+
+When MFA is enforced, `authorize()` pauses inside the Universal Login browser and presents the MFA challenge automatically. From your app's perspective, `authorize()` simply takes longer to resolve. No special handling is required for the happy path — only the failure cases need explicit handling:
+
+```ts
+// auth/useAuth0Login.ts — MFA-aware error handling
+export const useAuth0Login = () => {
+  const { authorize } = useAuth0();
+
+  const login = async () => {
+    try {
+      const credentials = await authorize({
+        audience: process.env.AUTH0_AUDIENCE!,
+        scope: 'openid profile email offline_access',
+      });
+      return credentials;
+    } catch (error: any) {
+      const code = error.code ?? error.message ?? '';
+
+      switch (code) {
+        case 'a0.session.user_cancelled':
+          return null; // User dismissed — not an error
+
+        case 'mfa_required':
+          // Should not occur with Universal Login — log for investigation
+          throw new AuthError('mfa_required', 'MFA setup incomplete for this account');
+
+        case 'mfa_enrollment_required':
+          // User has no MFA factor enrolled — redirect to enrollment
+          throw new AuthError('mfa_enrollment_required', 'Please set up two-factor authentication');
+
+        default:
+          throw error;
+      }
+    }
+  };
+
+  return { login };
+};
+```
+
+#### MFA Enrollment Flow
+
+For banking & payments apps where MFA enrollment is mandatory, handle `mfa_enrollment_required` by redirecting to Auth0's hosted enrollment page rather than building your own enrollment UI:
+
+```ts
+// auth/mfaEnrollment.ts
+import { Linking } from 'react-native';
+
+export const redirectToMFAEnrollment = async () => {
+  const enrollmentUrl = `https://${process.env.AUTH0_DOMAIN}/mfa-enrollment`;
+  await Linking.openURL(enrollmentUrl);
+};
+```
+
+> **Compliance note**: For banking & payments apps subject to PSD2 / Strong Customer Authentication (SCA), MFA is a regulatory requirement for payment initiation and account access. Auth0's "Always" MFA policy satisfies SCA requirements when combined with SMS or TOTP as the second factor.
+
+### Auth Error Handling — The Unhappy Paths
+
+Authentication fails in more ways than "wrong password". Each failure mode requires a distinct response — several should *not* log the user out, and treating them as equivalent causes subtle UX and security bugs.
+
+#### Error Classification
+
+```ts
+// auth/AuthError.ts
+export type AuthErrorCode =
+  | 'user_cancelled'          // User dismissed — stay on login screen, no action
+  | 'auth_timeout'            // No callback received — reset login state
+  | 'network_unavailable'     // Offline — show offline message, retry when online
+  | 'service_unavailable'     // Auth0 503 — show degraded state, never log out
+  | 'invalid_grant'           // Refresh token revoked (another device) — full logout
+  | 'mfa_required'            // MFA not completed — prompt again
+  | 'mfa_enrollment_required' // No MFA factor enrolled — redirect to enrollment
+  | 'biometric_not_enrolled'  // No biometric set up on device — redirect to settings
+  | 'biometric_lockout'       // OS-level lockout after too many attempts
+  | 'session_expired'         // Session definitively ended — full login required
+  | 'unknown';                // Unexpected — log to error tracker
+
+export class AuthError extends Error {
+  constructor(
+    public readonly code: AuthErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'AuthError';
+  }
+}
+```
+
+#### Centralised Error Handler
+
+```ts
+// auth/handleAuthError.ts
+import NetInfo from '@react-native-community/netinfo';
+import { AuthError, AuthErrorCode } from './AuthError';
+import { performFullLogout } from './logout';
+
+export const handleAuthError = async (error: unknown): Promise<AuthErrorCode> => {
+  const netState = await NetInfo.fetch();
+  if (!netState.isConnected) return 'network_unavailable';
+
+  if (error instanceof AuthError) return error.code;
+
+  const message = (error as any)?.message ?? '';
+  const status = (error as any)?.response?.status;
+
+  if (message.includes('user_cancelled') || message.includes('a0.session.user_cancelled')) {
+    return 'user_cancelled';
+  }
+  if (message.includes('auth_timeout')) return 'auth_timeout';
+  if (message.includes('invalid_grant')) {
+    await performFullLogout(); // revoked on another device — force full logout
+    return 'invalid_grant';
+  }
+  if (message.includes('mfa_enrollment_required')) return 'mfa_enrollment_required';
+  if (message.includes('mfa_required')) return 'mfa_required';
+  if (status === 503) return 'service_unavailable';
+  if (status === 401) return 'session_expired';
+  if (message.includes('NOT_ENROLLED')) return 'biometric_not_enrolled';
+  if (message.includes('LOCKOUT')) return 'biometric_lockout';
+
+  return 'unknown';
+};
+```
+
+#### Mapping Errors to UX Responses
+
+```ts
+// auth/useAuthErrorHandler.ts
+import { Linking } from 'react-native';
+import { handleAuthError } from './handleAuthError';
+import { useSessionStore } from './sessionStore';
+
+export const useAuthErrorHandler = () => {
+  const { setState } = useSessionStore();
+
+  const handleError = async (error: unknown) => {
+    const code = await handleAuthError(error);
+
+    switch (code) {
+      case 'user_cancelled':
+      case 'auth_timeout':
+        break; // Silent — user chose to cancel
+
+      case 'network_unavailable':
+        showToast('No internet connection. Check your network and try again.');
+        break;
+
+      case 'service_unavailable':
+        // DO NOT log out — Auth0 outage, the user's session is fine
+        showToast('Authentication service temporarily unavailable. Try again shortly.');
+        break;
+
+      case 'invalid_grant':
+        setState('unauthenticated');
+        showToast('Your session was ended on another device. Please log in again.');
+        break;
+
+      case 'mfa_enrollment_required':
+        navigateTo('MFAEnrollment');
+        break;
+
+      case 'mfa_required':
+        navigateTo('Login');
+        break;
+
+      case 'biometric_not_enrolled':
+        showAlert(
+          'Biometrics not set up',
+          'Set up Face ID or fingerprint in device Settings to continue.',
+          [{ text: 'Open Settings', onPress: () => Linking.openSettings() }],
+        );
+        break;
+
+      case 'biometric_lockout':
+        showAlert(
+          'Biometrics temporarily locked',
+          'Too many failed attempts. Use your PIN to unlock your device, then try again.',
+        );
+        break;
+
+      case 'session_expired':
+        setState('expired');
+        break;
+
+      case 'unknown':
+        logError(error); // Sentry, Datadog, etc.
+        showToast('Something went wrong. Please try again.');
+        break;
+    }
+
+    return code;
+  };
+
+  return { handleError };
+};
+```
+
+> **Key rule**: `service_unavailable` (503) must never trigger a logout. Auth0 outages are rare but real. Logging users out during an outage forces them to log back in — which also fails, compounding the incident.
+
 ---
 
 ## 3. JWT Token Strategy — Bearer Token Approach
 
-> The Bearer token pattern stores access and refresh tokens in Keychain, sends the access token in the `Authorization` header on every request, and silently refreshes it before it expires. It is the standard pattern for general-purpose apps. Fintech apps should evaluate the [HttpOnly Cookie approach](#4-httponly-cookie-session-strategy) instead.
+> The Bearer token pattern stores access and refresh tokens in Keychain, sends the access token in the `Authorization` header on every request, and silently refreshes it before it expires. It is the standard pattern for general-purpose apps. Banking & payments apps should evaluate the [HttpOnly Cookie approach](#4-httponly-cookie-session-strategy) instead.
 
 ### Token Lifetime Decisions
 
@@ -288,7 +776,7 @@ sequenceDiagram
 | Refresh token | 7–30 days (absolute) | Longer sessions reduce friction; absolute expiry forces re-login for abandoned sessions |
 | ID token | Same as access token | Used for user profile only — never sent to your resource server |
 
-For fintech apps, consider reducing access token lifetime to 5–10 minutes and enforcing step-up auth for high-value actions rather than relying purely on token freshness.
+For banking & payments apps, consider reducing access token lifetime to 5–10 minutes and enforcing step-up auth for high-value actions rather than relying purely on token freshness.
 
 ### Refresh Token Rotation
 
@@ -485,11 +973,11 @@ sequenceDiagram
 
 ## 4. HttpOnly Cookie Session Strategy
 
-> **Recommended for fintech and high-security apps.** General-purpose apps can use [Bearer tokens (Section 3)](#3-jwt-token-strategy--bearer-token-approach) and skip this section.
+> **Recommended for banking & payments and high-security apps.** General-purpose apps can use [Bearer tokens (Section 3)](#3-jwt-token-strategy--bearer-token-approach) and skip this section.
 
 The HttpOnly Cookie strategy is architecturally stronger than Bearer tokens for apps where session credential theft is a meaningful threat. The key difference: **the session credential never touches JavaScript**. The cookie is set by the server, stored by the OS, sent automatically by the HTTP layer, and is invisible to JS code — it cannot be read, logged, or stolen via JS-land exploits.
 
-### Why This Is Stronger Than Bearer Tokens for Fintech
+### Why This Is Stronger Than Bearer Tokens for Banking & Payments Apps
 
 With Bearer tokens, the flow is:
 1. App receives access token in a JSON response body
@@ -672,7 +1160,7 @@ router.post('/auth/session-refresh', requireBiometricToken, async (req, res) => 
 | Concurrent request handling | Queue-based interceptor needed | Handled by HTTP layer |
 | Mobile WebView support | Full | Requires `@react-native-cookies/cookies` |
 | Works with Auth0 Universal Login | ✅ | Partial — Auth0 issues JWT; backend wraps it in a cookie |
-| Recommended for | General apps, third-party API access | Fintech, banking, high-security apps |
+| Recommended for | General apps, third-party API access | Banking & payments, high-security apps |
 
 ```mermaid
 sequenceDiagram
@@ -820,9 +1308,9 @@ sequenceDiagram
 
 | Use Case | Pattern |
 |---|---|
-| Fintech onboarding — no password friction | Passwordless primary login via Auth0 |
+| Banking & payments onboarding — no password friction | Passwordless primary login via Auth0 |
 | New device registration | OTP step-up after initial biometric setup |
-| High-value action confirmation (fintech) | Step-up OTP challenge from backend |
+| High-value action confirmation (banking & payments) | Step-up OTP challenge from backend |
 | Account recovery | OTP as fallback when biometric fails |
 
 ### Auth0 Passwordless Setup
@@ -882,7 +1370,7 @@ export const startSMSListener = (onCode: (code: string) => void) => {
 };
 ```
 
-### Step-Up OTP for High-Value Actions (Fintech)
+### Step-Up OTP for High-Value Actions (Banking & Payments)
 
 Step-up auth triggers an OTP challenge mid-session for actions like initiating a transfer, viewing full account numbers, or changing security settings. The user is already authenticated — this is additional verification, not login.
 
@@ -1017,7 +1505,7 @@ Biometrics appear at three distinct points in the auth lifecycle, each requiring
 |---|---|---|
 | App resume from background | `AppState` change to `active` | Silent check — no network call, unlock local state |
 | Session expiry | 401 response or cookie timeout | Gate before `/session-refresh` call |
-| Step-up for high-value action | User initiates sensitive action (fintech) | Gate before step-up OTP or direct backend call |
+| Step-up for high-value action | User initiates sensitive action (banking & payments) | Gate before step-up OTP or direct backend call |
 
 ### Installation
 
@@ -1192,7 +1680,7 @@ stateDiagram-v2
     Locked --> [*]: Full logout — Keychain cleared
     Authenticated --> SessionRefresh: Session cookie expired (Section 4)
     SessionRefresh --> BiometricGate: Requires re-auth
-    Authenticated --> StepUp: High-value action (fintech)
+    Authenticated --> StepUp: High-value action (banking & payments)
     StepUp --> BiometricGate: Requires confirmation
 ```
 
@@ -1508,10 +1996,10 @@ router.post('/auth/logout-all', requireAuth, authController.logoutAll);
 router.get('/api/profile', requireAuth, userController.getProfile);
 router.get('/api/dashboard', requireAuth, dashboardController.get);
 
-// Protected routes — Cookie session (fintech)
+// Protected routes — Cookie session (banking & payments)
 router.get('/api/accounts', sessionMiddleware, requireSession, accountsController.list);
 
-// Fintech — step-up required
+// Banking & payments — step-up required
 router.post('/api/transfers', requireAuth, requireStepUp('INITIATE_TRANSFER'), transfersController.create);
 router.get('/api/account-number', requireAuth, requireStepUp('VIEW_ACCOUNT_NUMBER'), accountsController.getFullNumber);
 
@@ -1689,7 +2177,7 @@ flowchart TD
         G --> J[OTP / Passwordless]
         H & I & J --> K{Token strategy}
         K -- General app --> L[Store JWT\nin Keychain]
-        K -- Fintech --> M[Receive HttpOnly\nCookie]
+        K -- Banking & payments --> M[Receive HttpOnly\nCookie]
         L & M --> E
     end
 
@@ -1705,7 +2193,7 @@ flowchart TD
         T & U --> N
     end
 
-    subgraph STEPUP["Fintech Step-Up"]
+    subgraph STEPUP["Banking & Payments Step-Up"]
         E --> V[High-value action]
         V --> W[Biometric gate\nor OTP challenge]
         W -- Pass --> X[Step-up proof sent\nto backend]
@@ -1720,7 +2208,7 @@ flowchart TD
 flowchart TD
     A([New auth decision]) --> B{App type?}
     B -- General consumer app --> C{Primary login method?}
-    B -- Fintech / regulated --> D[HttpOnly Cookie session\n+ Step-up auth\n+ Biometric gate]
+    B -- Banking & payments --> D[HttpOnly Cookie session\n+ Step-up auth\n+ Biometric gate]
 
     C --> E{Social login only?}
     E -- Yes --> F[Google + Apple\nPKCE + Auth0 federation]

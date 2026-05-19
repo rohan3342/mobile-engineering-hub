@@ -13,10 +13,43 @@ Use this as a gate before shipping to production. Every item maps back to the [A
 - [ ] Allowed Callback and Logout URLs configured for your app scheme (`com.yourapp://`)
 - [ ] Custom claims Action deployed — roles, KYC status, account tier injected via namespace
 - [ ] Auth0 Audience matches the identifier configured on your backend resource server
+- [ ] `com.yourapp://auth0/callback` URL scheme registered in `AndroidManifest.xml` intent filter
+- [ ] `com.yourapp://auth0/callback` URL scheme registered in `Info.plist` CFBundleURLSchemes
+- [ ] `openURL` handler added to `AppDelegate.mm`
+- [ ] Callback URL wiring verified: `adb shell am start` / `xcrun simctl openurl` test passes
+- [ ] Android back button during login handled — app returns to login screen without hanging
+
+## Environment Configuration
+
+- [ ] Separate Auth0 tenants for dev, staging, and production — not one tenant with different env vars
+- [ ] `.env.development`, `.env.staging`, `.env.production` created and gitignored
+- [ ] `.env.example` committed with placeholder values for all required variables
+- [ ] GitHub Environments used to scope secrets — staging jobs never see production credentials
+- [ ] Each environment has its own Google/Apple social connection credentials
+- [ ] `inspectCurrentToken()` utility present for dev debugging — confirmed stripped in prod (`__DEV__` guard)
+
+## MFA
+
+- [ ] MFA enabled in Auth0 dashboard (Security → Multi-factor Auth)
+- [ ] MFA policy set to "Always" for banking & payments apps — "Allow Remember Browser" disabled
+- [ ] Auth0 Action deployed to enforce MFA for banking & payments users or high-risk logins
+- [ ] `mfa_enrollment_required` error redirects to enrollment flow — does not log user out
+- [ ] PSD2 / SCA compliance verified if app processes payments (MFA on payment initiation)
+
+## Auth Error Handling
+
+- [ ] `AuthError` type with all error codes defined — centralised, not scattered inline
+- [ ] `handleAuthError` checks network state before classifying errors
+- [ ] `service_unavailable` (503) never triggers logout — shows degraded state message
+- [ ] `invalid_grant` triggers full logout with "session ended on another device" message
+- [ ] `user_cancelled` and `auth_timeout` are silent — app stays on login screen
+- [ ] `biometric_not_enrolled` redirects to device Settings — does not lock user out
+- [ ] `biometric_lockout` shows PIN fallback message — does not terminate session
+- [ ] Unknown errors logged to error tracker (Sentry / Datadog) before showing generic message
 
 ## Token Strategy — Bearer Tokens (General Apps)
 
-- [ ] Access token lifetime set to 15 minutes (or 5–10 min for fintech)
+- [ ] Access token lifetime set to 15 minutes (or 5–10 min for banking & payments apps)
 - [ ] Tokens stored in Keychain with `WHEN_UNLOCKED_THIS_DEVICE_ONLY` — never in AsyncStorage
 - [ ] MMKV encryption key sourced from Keychain — not hardcoded
 - [ ] Proactive refresh fires 60s before expiry
@@ -24,7 +57,7 @@ Use this as a gate before shipping to production. Every item maps back to the [A
 - [ ] Refresh token revoked at Auth0 on logout
 - [ ] Token family invalidation (reuse detection) verified in staging
 
-## Token Strategy — HttpOnly Cookie Session (Fintech Apps)
+## Token Strategy — HttpOnly Cookie Session (Banking & Payments Apps)
 
 - [ ] Login response sets `HttpOnly`, `Secure`, `SameSite=Strict` cookie
 - [ ] `rolling: true` configured on session middleware — every request extends expiry
@@ -49,7 +82,7 @@ Use this as a gate before shipping to production. Every item maps back to the [A
 - [ ] OTP rate limiting: max 5 requests per 15 min per user (not just per IP)
 - [ ] OTP resend rate limiting: max 1 resend per minute
 - [ ] Step-up challenge tokens are short-lived (5 min max) and single-use
-- [ ] Step-up required for: transfers, viewing account numbers, changing security settings (fintech)
+- [ ] Step-up required for: transfers, viewing account numbers, changing security settings (banking & payments)
 - [ ] OTP brute-force lockout: account locked after 3 failed attempts with cooldown
 - [ ] SMS auto-read (`react-native-otp-verify`) tested on Android physical device
 
@@ -60,7 +93,7 @@ Use this as a gate before shipping to production. Every item maps back to the [A
 - [ ] Biometric keypair enrolled on first login — public key registered with backend
 - [ ] App locks after 30s in background (`AppState` listener configured)
 - [ ] Biometric failure → PIN fallback → full logout after 3 failures
-- [ ] Step-up biometric gate implemented for high-value actions (fintech)
+- [ ] Step-up biometric gate implemented for high-value actions (banking & payments)
 - [ ] Biometric gate tested on physical device — Face ID, Touch ID, and Android fingerprint
 
 ## Session Management

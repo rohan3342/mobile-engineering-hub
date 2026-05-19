@@ -1738,4 +1738,4 @@ flowchart TD
 
 The full pre-launch checklist — covering Auth0 configuration, token strategy, social login, OTP, biometric gate, session management, backend middleware, and testing — lives in its own dedicated file.
 
-**[React Native Auth — Pre-Launch Checklist](./03-auth-checklist.md)**
+**[React Native Auth — Pre-Launch Checklist](./02-auth-checklist.md)**

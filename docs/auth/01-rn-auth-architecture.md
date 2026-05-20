@@ -975,107 +975,317 @@ sequenceDiagram
 
 > **Recommended for banking & payments and high-security apps.** General-purpose apps can use [Bearer tokens (Section 3)](#3-jwt-token-strategy--bearer-token-approach) and skip this section.
 
-The HttpOnly Cookie strategy is architecturally stronger than Bearer tokens for apps where session credential theft is a meaningful threat. The key difference: **the session credential never touches JavaScript**. The cookie is set by the server, stored by the OS, sent automatically by the HTTP layer, and is invisible to JS code — it cannot be read, logged, or stolen via JS-land exploits.
+HttpOnly cookies are architecturally stronger than Bearer tokens for apps where session credential theft is a meaningful threat. The key difference: **the session credential never touches JavaScript**. The cookie is set by the server, stored by the OS, sent automatically by the HTTP layer, and is invisible to JS code — it cannot be read, logged, or stolen via JS-land exploits.
 
-### Why This Is Stronger Than Bearer Tokens for Banking & Payments Apps
+This section covers two distinct approaches to implementing HttpOnly cookie sessions:
 
-With Bearer tokens, the flow is:
+- **Pattern A — Hybrid**: The app uses `react-native-auth0` to complete the PKCE flow directly with Auth0, receives a JWT, and your backend wraps it in a session cookie. Auth0 logic is split between the app and the backend.
+- **Pattern B — Backend-as-Auth0-client** *(recommended for banking & payments)*: The app never talks to Auth0 directly. Your backend owns the entire Auth0 relationship — PKCE flow, token storage, session management. The app only ever receives and sends a session cookie.
+
+---
+
+### Why HttpOnly Cookies Are Stronger Than Bearer Tokens
+
+With Bearer tokens, JS touches the credential at every step:
 1. App receives access token in a JSON response body
 2. App stores it in Keychain (JS reads it, passes it to native Keychain API)
 3. App reads it from Keychain on every request (JS reads it again)
 4. App attaches it to the `Authorization` header (JS constructs the header)
 
-Each step where JS touches the token is a potential exposure point on a compromised device.
-
 With HttpOnly cookies:
-1. App POSTs credentials to `/auth/login`
-2. Server sets `Set-Cookie: session=...; HttpOnly; Secure; SameSite=Strict`
+1. App POSTs to your backend login endpoint
+2. Backend sets `Set-Cookie: session=...; HttpOnly; Secure; SameSite=Strict`
 3. HTTP layer (OS-managed) stores and sends the cookie automatically
-4. JS never sees the cookie value — it cannot read `document.cookie` equivalents in RN's HTTP layer
+4. JS never sees the cookie value at any point
 
-The session credential is managed entirely below the JS layer.
+The session credential is managed entirely below the JS layer regardless of which pattern you choose. The difference between Pattern A and B is *where Auth0 logic lives* — not whether the cookie is secure.
 
-### Login Flow — Setting the Cookie
+---
 
+### Pattern A — Hybrid (App + Backend share Auth0 responsibility)
+
+> Use this if you already have `react-native-auth0` integrated and want to add cookie-based sessions without a full backend refactor. It is a valid intermediate step — but it is not the cleanest architecture for banking & payments apps long-term.
+
+In Pattern A, the app completes the Auth0 PKCE flow directly, receives a JWT, and exchanges it with your backend for a session cookie. Auth0 configuration (`domain`, `clientId`, `audience`) still ships with the app.
+
+```
+RN App → Auth0 (Universal Login / PKCE) → RN App (JWT)
+RN App → Your Backend (POST JWT) → Your Backend sets session cookie
+RN App → Your Backend (cookie on all subsequent requests)
+```
+
+**What this achieves:** The JWT is short-lived and immediately exchanged — it doesn't sit in Keychain long-term. All subsequent requests use the HttpOnly cookie. Better than pure Bearer token storage, but Auth0 credentials still exist in the app bundle.
+
+**The limitation:** Auth0 `domain`, `clientId`, and `audience` are still in the app. Token rotation, MFA enforcement, and custom claim logic are split across the app SDK and your backend. When Auth0 APIs change, you may need a coordinated mobile + backend release.
+
+**Backend token-exchange endpoint:**
 ```ts
-// api/authApi.ts — cookie-based login
-import axios from 'axios';
+// routes/auth.ts — Pattern A: exchange Auth0 JWT for session cookie
+router.post('/auth/exchange', requireAuth, async (req, res) => {
+  // requireAuth validates the Auth0 JWT (already verified via JWKS)
+  const userId = req.auth.payload.sub;
+  const user = await userService.findById(userId);
 
-const authClient = axios.create({
-  baseURL: process.env.API_BASE_URL,
-  withCredentials: true, // send/receive cookies
+  if (!user) return res.status(401).json({ error: 'User not found' });
+
+  // Create server-side session — Auth0 JWT is discarded after this point
+  req.session.regenerate((err) => {
+    if (err) return res.status(500).json({ error: 'Session error' });
+    req.session.userId = userId;
+    req.session.kycStatus = req.auth.payload['https://yourapp.com/kyc_status'];
+    res.json({ user: { id: user.id, email: user.email } });
+    // HttpOnly cookie set automatically by session middleware
+  });
 });
+```
 
-export const login = async (email: string, password: string) => {
-  // POST /auth/login — backend sets HttpOnly cookie in response
-  const response = await authClient.post('/auth/login', { email, password });
-  return response.data; // { user, expiresAt } — no token in body
-};
+**App-side exchange after PKCE login:**
+```ts
+// auth/useAuth0Login.ts — Pattern A
+export const useAuth0Login = () => {
+  const { authorize } = useAuth0();
 
-export const sessionRefresh = async () => {
-  // POST /session-refresh — re-authenticates and issues new cookie
-  const response = await authClient.post('/auth/session-refresh');
-  return response.data;
-};
+  const login = async () => {
+    // Step 1: PKCE flow with Auth0 — app receives JWT
+    const credentials = await authorize({
+      audience: process.env.AUTH0_AUDIENCE!,
+      scope: 'openid profile email offline_access',
+    });
 
-export const logout = async () => {
-  await authClient.post('/auth/logout'); // backend clears the cookie
+    // Step 2: Exchange JWT for session cookie immediately
+    // After this call, the JWT is no longer needed — backend owns the session
+    await cookieApiClient.post('/auth/exchange', null, {
+      headers: { Authorization: `Bearer ${credentials.accessToken}` },
+    });
+
+    // Do NOT store credentials in Keychain — session cookie is the credential now
+  };
+
+  return { login };
 };
 ```
 
-### Cookie Jar Configuration for React Native
+> **Upgrade path**: Pattern A is a stepping stone. Once you have the backend session infrastructure in place, migrating to Pattern B means removing `react-native-auth0` from the app and moving the PKCE flow entirely to the backend — no cookie or session middleware changes required.
 
-React Native's `fetch` and `axios` don't handle cookies automatically out of the box. You need `@react-native-cookies/cookies` to manage the cookie jar:
+---
 
-```bash
-yarn add @react-native-cookies/cookies
-cd ios && pod install
+### Pattern B — Backend-as-Auth0-Client *(Recommended for banking & payments)*
+
+> The app never holds a JWT, a refresh token, or any Auth0 credential. The only thing on the device is a session cookie managed below the JS layer. Auth0 is an implementation detail of your backend — the app doesn't know or care that Auth0 exists.
+
+```
+RN App → Your Backend (initiates PKCE) → Auth0
+Auth0 → Your Backend (callback with JWT) → Your Backend (creates session)
+Your Backend → RN App (session cookie only)
+RN App → Your Backend (cookie on all requests)
+```
+
+#### Why This Is the Cleaner Architecture
+
+| | Pattern A (Hybrid) | Pattern B (Backend-as-client) |
+|---|---|---|
+| Auth0 credentials in app bundle | Yes — `domain`, `clientId`, `audience` | No — nothing Auth0-specific in app |
+| JWT ever touches JS layer | Yes — briefly during exchange | Never |
+| `react-native-auth0` SDK required | Yes | No |
+| Auth0 config changes require app release | Sometimes | Never |
+| Auth logic ownership | Split — app + backend | Backend only |
+| Social login federation | App calls provider → Auth0 → backend | App sends provider token → backend → Auth0 |
+| Recommended for | Intermediate / migration step | Banking & payments, high-security |
+
+#### How Universal Login Works in Pattern B
+
+The PKCE flow still opens a browser — but the redirect callback goes to *your backend*, not back to the app. Your backend completes the code exchange with Auth0, creates the session, and redirects the browser back to the app via deep link with the session cookie already set.
+
+```
+1. App calls GET /auth/login/initiate
+2. Backend generates PKCE code_verifier + code_challenge, stores in Redis
+3. Backend returns Auth0 authorize URL to app
+4. App opens URL in browser (Chrome Custom Tab / ASWebAuthenticationSession)
+5. User authenticates in Auth0 Universal Login
+6. Auth0 redirects to YOUR BACKEND callback: GET /auth/callback?code=...&state=...
+7. Backend exchanges code for JWT (using stored code_verifier)
+8. Backend creates session, sets HttpOnly cookie on the response
+9. Backend redirects browser to app deep link: com.yourapp://auth/complete
+10. App deep link fires — session cookie is already set, user is authenticated
+```
+
+#### Backend PKCE Initiation
+
+```ts
+// routes/auth.ts — Pattern B
+import crypto from 'crypto';
+import { generatePKCE } from '../utils/pkce';
+
+router.get('/auth/login/initiate', async (req, res) => {
+  const { codeVerifier, codeChallenge } = generatePKCE();
+  const state = crypto.randomBytes(16).toString('hex');
+
+  // Store verifier and state — needed to complete exchange in callback
+  await redis.setex(`pkce:${state}`, 600, JSON.stringify({ codeVerifier }));
+
+  const authorizeUrl = new URL(`https://${process.env.AUTH0_DOMAIN}/authorize`);
+  authorizeUrl.searchParams.set('response_type', 'code');
+  authorizeUrl.searchParams.set('client_id', process.env.AUTH0_CLIENT_ID!);
+  authorizeUrl.searchParams.set('redirect_uri', process.env.AUTH0_CALLBACK_URL!); // your backend URL
+  authorizeUrl.searchParams.set('scope', 'openid profile email offline_access');
+  authorizeUrl.searchParams.set('audience', process.env.AUTH0_AUDIENCE!);
+  authorizeUrl.searchParams.set('code_challenge', codeChallenge);
+  authorizeUrl.searchParams.set('code_challenge_method', 'S256');
+  authorizeUrl.searchParams.set('state', state);
+
+  res.json({ authorizeUrl: authorizeUrl.toString() });
+});
 ```
 
 ```ts
-// api/cookieClient.ts
-import axios from 'axios';
-import CookieManager from '@react-native-cookies/cookies';
+// utils/pkce.ts
+import crypto from 'crypto';
 
-// Enable cookie handling globally
-CookieManager.setFromResponse(
-  process.env.API_BASE_URL!,
-  'session=; Path=/; HttpOnly; Secure'
-);
+export const generatePKCE = () => {
+  const codeVerifier = crypto.randomBytes(32).toString('base64url');
+  const codeChallenge = crypto
+    .createHash('sha256')
+    .update(codeVerifier)
+    .digest('base64url');
+  return { codeVerifier, codeChallenge };
+};
+```
 
-export const cookieApiClient = axios.create({
-  baseURL: process.env.API_BASE_URL,
-  withCredentials: true,
+#### Backend Auth0 Callback Handler
+
+```ts
+// routes/auth.ts — callback from Auth0
+router.get('/auth/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+
+  if (error) {
+    // Auth0 returned an error (user cancelled, MFA failed, etc.)
+    return res.redirect(`${process.env.APP_DEEP_LINK_BASE}/auth/error?reason=${error}`);
+  }
+
+  // Retrieve and validate stored PKCE state
+  const stored = await redis.get(`pkce:${state}`);
+  if (!stored) return res.status(400).json({ error: 'Invalid or expired state' });
+
+  const { codeVerifier } = JSON.parse(stored);
+  await redis.del(`pkce:${state}`); // single-use
+
+  // Exchange authorization code for tokens — backend holds these, never the app
+  const tokenResponse = await fetch(`https://${process.env.AUTH0_DOMAIN}/oauth/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'authorization_code',
+      client_id: process.env.AUTH0_CLIENT_ID,
+      code_verifier: codeVerifier,
+      code,
+      redirect_uri: process.env.AUTH0_CALLBACK_URL,
+    }),
+  });
+
+  const { access_token, refresh_token, id_token } = await tokenResponse.json();
+
+  // Decode claims — store relevant ones in the session
+  const claims = decodeJwt(access_token); // verify signature via JWKS first
+  const userId = claims.sub;
+
+  // Upsert user in your database
+  const user = await userService.upsertFromAuth0({
+    auth0Id: userId,
+    email: claims.email,
+    kycStatus: claims['https://yourapp.com/kyc_status'],
+  });
+
+  // Store Auth0 refresh token securely on the backend — app never sees it
+  await tokenService.storeRefreshToken(userId, refresh_token);
+
+  // Create session — this sets the HttpOnly cookie
+  req.session.regenerate((err) => {
+    if (err) return res.status(500).json({ error: 'Session error' });
+    req.session.userId = userId;
+    req.session.kycStatus = user.kycStatus;
+    req.session.createdAt = new Date().toISOString();
+
+    // Redirect browser back to app — deep link fires, app is now authenticated
+    res.redirect(`${process.env.APP_DEEP_LINK_BASE}/auth/complete`);
+  });
 });
+```
 
-// Response interceptor — handle session expiry (401)
-cookieApiClient.interceptors.response.use(
-  (response) => response,
-  async (error) => {
-    if (error.response?.status === 401) {
-      try {
-        // Trigger biometric gate before calling session-refresh
-        await requireBiometricConfirmation(); // see Section 7
-        await sessionRefresh();
-        return cookieApiClient(error.config); // retry original request
-      } catch {
-        // Biometric failed or session-refresh failed — full logout
-        await CookieManager.clearAll();
-        // Navigate to login
-      }
+#### App-Side — Opening the Auth Flow
+
+In Pattern B, the app has almost no auth logic. It opens a browser, waits for the deep link callback, and checks its session state:
+
+```ts
+// auth/usePatternBLogin.ts
+import { Linking, Platform } from 'react-native';
+import { InAppBrowser } from 'react-native-inappbrowser-reborn';
+import { cookieApiClient } from '../api/cookieClient';
+import { useSessionStore } from './sessionStore';
+
+export const usePatternBLogin = () => {
+  const { setState } = useSessionStore();
+
+  const login = async () => {
+    // Step 1: Get the Auth0 authorize URL from your backend
+    const { authorizeUrl } = await cookieApiClient
+      .get('/auth/login/initiate')
+      .then(r => r.data);
+
+    // Step 2: Open browser — Auth0 Universal Login
+    if (await InAppBrowser.isAvailable()) {
+      await InAppBrowser.open(authorizeUrl, {
+        dismissButtonStyle: 'cancel',
+        preferredBarTintColor: '#1a1a2e',
+        readerMode: false,
+        animated: true,
+        modalEnabled: true,
+        enableBarCollapsing: false,
+      });
+    } else {
+      await Linking.openURL(authorizeUrl);
     }
-    return Promise.reject(error);
-  },
-);
+    // Browser closes when Auth0 redirects to your backend callback URL
+    // Backend sets cookie and redirects to com.yourapp://auth/complete
+  };
+
+  return { login };
+};
 ```
 
-### Backend Implementation — Activity-Based Expiry Extension
-
-Every authenticated request extends the session. If no request is made within 15 minutes, the cookie expires and the client must call `/session-refresh`.
-
-**Node/Express:**
 ```ts
-// middleware/session.ts
+// navigation/AppNavigator.tsx — handle the deep link callback
+import { useLinkingConfig } from '@react-navigation/native';
+
+// Deep link: com.yourapp://auth/complete → verify session with backend
+const handleAuthComplete = async () => {
+  try {
+    const { user } = await cookieApiClient.get('/auth/me').then(r => r.data);
+    useSessionStore.getState().setUser(user);
+    useSessionStore.getState().setState('authenticated');
+  } catch {
+    useSessionStore.getState().setState('unauthenticated');
+  }
+};
+```
+
+#### Backend `/auth/me` — Session Verification on Cold Start
+
+Since there's no token to decode locally, the app always asks the backend to verify the session:
+
+```ts
+// routes/auth.ts
+router.get('/auth/me', requireSession, async (req, res) => {
+  const user = await userService.findById(req.session.userId);
+  if (!user) return res.status(401).json({ error: 'Session invalid' });
+  res.json({ user: { id: user.id, email: user.email, kycStatus: user.kycStatus } });
+});
+```
+
+#### Session Middleware — Activity-Based Expiry
+
+```ts
+// middleware/session.ts — same for both Pattern A and B
 import session from 'express-session';
 import RedisStore from 'connect-redis';
 import { createClient } from 'redis';
@@ -1090,10 +1300,10 @@ export const sessionMiddleware = session({
   saveUninitialized: false,
   rolling: true, // ← extends expiry on every request (activity-based)
   cookie: {
-    httpOnly: true,     // JS cannot read this cookie
-    secure: true,       // HTTPS only
-    sameSite: 'strict', // no cross-site requests
-    maxAge: 15 * 60 * 1000, // 15 minutes — resets on every request
+    httpOnly: true,
+    secure: true,
+    sameSite: 'strict',
+    maxAge: 15 * 60 * 1000, // 15 min — resets on every authenticated request
     domain: process.env.COOKIE_DOMAIN,
     path: '/',
   },
@@ -1102,33 +1312,26 @@ export const sessionMiddleware = session({
 
 **Spring Boot equivalent:**
 ```java
-// SecurityConfig.java
 @Bean
 public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
     http
         .sessionManagement(session -> session
             .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
             .maximumSessions(1)
-            .maxSessionsPreventsLogin(false)
         )
         .rememberMe(rememberMe -> rememberMe
-            .tokenValiditySeconds(900) // 15 minutes
+            .tokenValiditySeconds(900)
             .useSecureCookie(true)
         );
     return http.build();
 }
 ```
 
-### `/session-refresh` Endpoint
-
-Called when the session cookie has expired. It re-authenticates the user (biometric confirmation happens on the client before this call is made) and issues a new cookie.
+#### `/session-refresh` — Re-authentication After Inactivity
 
 ```ts
-// routes/auth.ts (Node/Express)
+// routes/auth.ts
 router.post('/auth/session-refresh', requireBiometricToken, async (req, res) => {
-  // requireBiometricToken verifies a short-lived proof from the app
-  // that biometric confirmation was completed on-device
-
   const userId = req.biometricClaims.sub;
   const user = await userService.findById(userId);
 
@@ -1136,56 +1339,124 @@ router.post('/auth/session-refresh', requireBiometricToken, async (req, res) => 
     return res.status(401).json({ error: 'Session refresh denied' });
   }
 
-  // Regenerate session — old session is invalidated
+  // Check if the backend-stored Auth0 refresh token is still valid
+  // If not, force full re-login through the browser
+  const canRefresh = await tokenService.validateRefreshToken(userId);
+  if (!canRefresh) {
+    return res.status(401).json({
+      error: 'full_reauth_required',
+      message: 'Your session cannot be refreshed — please log in again',
+    });
+  }
+
   req.session.regenerate((err) => {
     if (err) return res.status(500).json({ error: 'Session error' });
-
     req.session.userId = userId;
     req.session.refreshedAt = new Date().toISOString();
-
-    // Cookie is set automatically by express-session with rolling: true
     res.json({ user: { id: user.id, email: user.email } });
   });
 });
 ```
 
-### Bearer Token vs. HttpOnly Cookie — When to Use Each
+#### Cookie Jar Configuration (Same for Pattern A and B)
 
-| | Bearer Token | HttpOnly Cookie |
-|---|---|---|
-| Token visible to JavaScript | Yes — Keychain read in JS | No — invisible to JS entirely |
-| Client-side storage attack surface | Keychain extraction on rooted device | None — no credential stored on JS layer |
-| CORS configuration required | Minimal | Yes — `credentials: 'include'`, explicit `Access-Control-Allow-Origin` |
-| Session extension mechanism | Manual proactive/reactive refresh | Automatic — `rolling: true` on every request |
-| Concurrent request handling | Queue-based interceptor needed | Handled by HTTP layer |
-| Mobile WebView support | Full | Requires `@react-native-cookies/cookies` |
-| Works with Auth0 Universal Login | ✅ | Partial — Auth0 issues JWT; backend wraps it in a cookie |
-| Recommended for | General apps, third-party API access | Banking & payments, high-security apps |
+```bash
+yarn add @react-native-cookies/cookies react-native-inappbrowser-reborn
+cd ios && pod install
+```
+
+```ts
+// api/cookieClient.ts
+import axios from 'axios';
+
+export const cookieApiClient = axios.create({
+  baseURL: process.env.API_BASE_URL,
+  withCredentials: true, // send/receive cookies automatically
+});
+
+cookieApiClient.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    if (error.response?.status === 401) {
+      const reason = error.response?.data?.error;
+
+      if (reason === 'full_reauth_required') {
+        // Backend says refresh token is also expired — full browser login
+        await performFullLogout();
+        return Promise.reject(error);
+      }
+
+      try {
+        await requireBiometricConfirmation();
+        await cookieApiClient.post('/auth/session-refresh');
+        return cookieApiClient(error.config);
+      } catch {
+        await performFullLogout();
+      }
+    }
+    return Promise.reject(error);
+  },
+);
+```
+
+---
+
+### Comparison — All Three Approaches
+
+| | Bearer Token (Section 3) | Pattern A — Hybrid | Pattern B — Backend-as-client |
+|---|---|---|---|
+| Auth0 credentials in app | Yes | Yes | **No** |
+| JWT ever in JS layer | Yes — stored in Keychain | Yes — briefly during exchange | **Never** |
+| `react-native-auth0` required | Yes | Yes | **No** |
+| Auth0 config changes need app release | Sometimes | Sometimes | **Never** |
+| Client credential surface | Keychain | Cookie only (after exchange) | **Cookie only** |
+| Cold start session check | Local JWT decode | Network request | Network request |
+| Auth logic ownership | App + Backend | App + Backend | **Backend only** |
+| Social login token handling | App → Auth0 → Backend | App → Auth0 → Backend | **App → Backend → Auth0** |
+| Complexity | Low | Medium | Medium-High |
+| Recommended for | General apps | Migration / intermediate | **Banking & payments** |
 
 ```mermaid
 sequenceDiagram
     participant App as RN App
     participant Backend
+    participant Auth0
     participant Redis
 
-    App->>Backend: POST /auth/login {email, password}
-    Backend->>Backend: Validate credentials via Auth0
-    Backend->>Redis: Create session
-    Backend->>App: 200 OK + Set-Cookie: session= HttpOnly#59; Secure#59;
-    Note over App: Cookie stored by OS — JS never sees it
+    Note over App,Redis: Pattern B — Backend-as-Auth0-client
 
-    loop Every authenticated request (resets 15-min timer)
-        App->>Backend: GET /api/data (cookie sent automatically)
+    App->>Backend: GET /auth/login/initiate
+    Backend->>Backend: Generate PKCE code_verifier + state
+    Backend->>Redis: Store {codeVerifier, state} (TTL: 10min)
+    Backend->>App: { authorizeUrl }
+
+    App->>Auth0: Open browser with authorizeUrl
+    Note over App: Chrome Custom Tab / ASWebAuthenticationSession
+    Auth0->>Auth0: User authenticates + MFA
+    Auth0->>Backend: GET /auth/callback?code=...&state=...
+
+    Backend->>Redis: Retrieve + delete {codeVerifier} by state
+    Backend->>Auth0: POST /oauth/token (code + code_verifier)
+    Auth0->>Backend: access_token + refresh_token
+    Backend->>Backend: Validate JWT, upsert user, store refresh_token
+    Backend->>Redis: Create session
+    Backend->>App: 302 → com.yourapp://auth/complete (Set-Cookie: session)
+
+    App->>Backend: GET /auth/me (cookie sent automatically)
+    Backend->>App: { user } — authenticated
+
+    loop Every request (resets 15-min timer)
+        App->>Backend: API call (cookie automatic)
         Backend->>Redis: Validate + extend session TTL
-        Backend->>App: 200 OK + data
+        Backend->>App: 200 OK
     end
 
-    Note over App: 15 min with no requests — cookie expires
-
-    App->>App: Biometric confirmation (Section 7)
+    Note over App: 15 min inactivity — cookie expires
+    App->>App: Biometric gate
     App->>Backend: POST /auth/session-refresh (biometric proof)
+    Backend->>Backend: Validate biometric proof + refresh token
     Backend->>Redis: Invalidate old session, create new
-    Backend->>App: 200 OK + Set-Cookie: new session cookie
+    Backend->>App: 200 OK + new session cookie
 ```
 
 ---
@@ -2226,4 +2497,4 @@ flowchart TD
 
 The full pre-launch checklist — covering Auth0 configuration, token strategy, social login, OTP, biometric gate, session management, backend middleware, and testing — lives in its own dedicated file.
 
-**[React Native Auth — Pre-Launch Checklist](./02-auth-checklist.md)**
+**[React Native Auth — Pre-Launch Checklist](./03-auth-checklist.md)**

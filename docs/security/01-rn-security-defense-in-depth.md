@@ -1743,7 +1743,7 @@ flowchart LR
    BFF -- "POST /charges\nAuthorization: Bearer STRIPE_SECRET_KEY" --> STRIPE["Stripe API"]
    STRIPE -- "Payment intent" --> BFF
    BFF -- "client_secret (one-time use)" --> APP
-   NOTE["Stripe secret key\nnever leaves your server"] -. .-> BFF
+   NOTE["Stripe secret key\nnever leaves your server"] -.-> BFF
 ```
 
 **3. Runtime key fetching (for public keys, config)**

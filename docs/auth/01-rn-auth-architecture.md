@@ -1171,7 +1171,7 @@ sequenceDiagram
     App->>Backend: POST /auth/login {email, password}
     Backend->>Backend: Validate credentials via Auth0
     Backend->>Redis: Create session
-    Backend->>App: 200 OK + Set-Cookie: session=...; HttpOnly; Secure
+    Backend->>App: 200 OK + Set-Cookie: session= HttpOnly#59; Secure#59;
     Note over App: Cookie stored by OS — JS never sees it
 
     loop Every authenticated request (resets 15-min timer)

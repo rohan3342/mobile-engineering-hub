@@ -1054,26 +1054,36 @@ Three libraries close this gap, each protecting a different sensitivity tier:
 
 ```mermaid
 flowchart TB
-   subgraph T1["Tier 3 — Plaintext Filesystem  (non-sensitive only)"]
-       direction LR
-       T1A["AsyncStorage / unencrypted MMKV\nReadable by any process on rooted device"]
-       T1B["UI preferences · theme · locale\nnon-sensitive feature flags"]
-   end
+    %% Vertically stacked and horizontally centered tiers
+    subgraph T1["Tier 3 — Plaintext Filesystem  (non-sensitive only)"]
+        direction TB
+        T1A["AsyncStorage / unencrypted MMKV\nReadable by any process on rooted device"]
+        T1B["UI preferences · theme · locale\nnon-sensitive feature flags"]
+    end
 
-   subgraph T2["Tier 2 — AES-256 Encrypted File  (session metadata)"]
-       direction LR
-       T2A["MMKV withEncryption()\nKey stored in Android Keystore / iOS Secure Enclave"]
-       T2B["Session tokens · device IDs\nbiometric flags · access-control timestamps"]
-   end
+    subgraph T2["Tier 2 — AES-256 Encrypted File  (session metadata)"]
+        direction TB
+        T2A["MMKV withEncryption()\nKey stored in Android Keystore / iOS Secure Enclave"]
+        T2B["Session tokens · device IDs\nbiometric flags · access-control timestamps"]
+    end
 
-   subgraph T3["Tier 1 — Hardware Secure Enclave  (credentials)"]
-       direction LR
-       T3A["iOS Keychain / Android Keystore\nNever written to filesystem\nBiometric challenge required to read"]
-       T3B["Passwords · auth credentials\nprivate keys · refresh tokens"]
-   end
+    subgraph T3["Tier 1 — Hardware Secure Enclave  (credentials)"]
+        direction TB
+        T3A["iOS Keychain / Android Keystore\nNever written to filesystem\nBiometric challenge required to read"]
+        T3B["Passwords · auth credentials\nprivate keys · refresh tokens"]
+    end
 
-   T1 -- migrate security-relevant data up --> T2
-   T2 -- migrate credentials up --> T3
+    %% Straight vertical alignment between tiers
+    T1 -->|"migrate security-relevant data up"| T2
+    T2 -->|"migrate credentials up"| T3
+
+    classDef tier3 fill:#eef2ff,stroke:#818cf8,color:#1e1e1e,text-align:center;
+    classDef tier2 fill:#f0fdfa,stroke:#2dd4bf,color:#1e1e1e,text-align:center;
+    classDef tier1 fill:#fef2f2,stroke:#f87171,color:#1e1e1e,text-align:center;
+
+    class T1,T1A,T1B tier3;
+    class T2,T2A,T2B tier2;
+    class T3,T3A,T3B tier1;
 ```
 
 ---
